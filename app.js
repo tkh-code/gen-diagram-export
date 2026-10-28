@@ -302,7 +302,37 @@ function parseAnl(text) {
       start = end;
     }
   }
-  return { cases, elements, units };
+  return { cases, elements, units, caseNames: anlCaseNames(lines, cases) };
+}
+
+// The force tables print load cases by their 8-character short names
+// ("NΣDL+S~4"). Map them to the full names in the summary table
+// (<< ...要約表 >>: short, full, type, note); when two cases share a full
+// name, the type is appended so the list stays unambiguous.
+function anlCaseNames(lines, cases) {
+  const start = lines.findIndex((line) => /<<.*要約表.*>>/.test(line));
+  const rows = new Map();
+  if (start >= 0) {
+    let rules = 0;
+    for (let i = start + 1; i < lines.length && rules < 2; i++) {
+      const line = lines[i].trim();
+      if (/^-{6,}/.test(line)) { rules++; continue; }
+      if (rules !== 1 || !line) continue;
+      const [short, full, type] = line.split(/\s+/);
+      if (short && full) rows.set(koreanCaseName(short), { full: koreanCaseName(full), type: type || "" });
+    }
+  }
+  const names = new Map(), counts = new Map();
+  for (const lc of cases) { const full = rows.get(lc)?.full || lc; counts.set(full, (counts.get(full) || 0) + 1); }
+  for (const lc of cases) {
+    const row = rows.get(lc), full = row?.full || lc;
+    names.set(lc, counts.get(full) > 1 && row?.type ? `${full}（${row.type}）` : full);
+  }
+  return names;
+}
+
+function caseLabel(lc) {
+  return app.result?.parsed?.caseNames?.get(lc) || lc;
 }
 
 function validateModelResult(model, result) {
@@ -396,7 +426,7 @@ function renderChoices() {
   const data = app.data;
   if (!data.synthetic && !app.result && diagramType() === "stress") document.querySelector('input[name="diagramType"][value="member"]').checked = true;
   syncFontSizeForMode();
-  $("#caseList").innerHTML = data.cases.map((item, i) => `<label class="choice-row"><input type="checkbox" data-kind="case" value="${i}" ${i === 0 ? "checked" : ""}><span>${escapeHtml(item)}</span></label>`).join("");
+  $("#caseList").innerHTML = data.cases.map((item, i) => `<label class="choice-row"><input type="checkbox" data-kind="case" value="${i}" ${i === 0 ? "checked" : ""}><span>${escapeHtml(caseLabel(item))}</span></label>`).join("");
   $("#planeList").innerHTML = data.planes.map((item, i) => `<label class="choice-row"><input type="checkbox" data-kind="plane" value="${i}" ${i === 0 ? "checked" : ""}><span>${escapeHtml(typeof item === "string" ? item : item.name)}</span></label>`).join("");
   $("#planeHint").textContent = data.synthetic ? "登録平面ごとに1枚ずつ作成します。" : data.planes.length ? "MGTXの登録平面を読み込みました。選択した面上の部材だけを表示します。" : "MGTX内に登録平面を見つけられませんでした。";
   $("#workspace").classList.remove("hidden");
@@ -448,7 +478,7 @@ function drawingTitle(plane, loadCase, comp) {
   if (plane?.partLabel) line += `（${plane.partLabel}）`;
   if (comp === "member" || comp === "section") return { line, detail: comp === "member" ? "部材番号" : "断面番号" };
   const diagramCode = ({ MY: "My", MZ: "Mz", QY: "Qy", QZ: "Qz", N: "N" })[comp] || String(comp || "");
-  return { line, detail: `${diagramCode}図 (${String(loadCase || "")})` };
+  return { line, detail: `${diagramCode}図 (${caseLabel(String(loadCase || ""))})` };
 }
 
 function stableHash(text) {
@@ -649,6 +679,117 @@ function memberEndpointNodes(model, group, byId = new Map(model.elements.map((el
 
 function dimensionItemsForPlane(model, plane) {
   if (!model.dimensions?.size) return [];
+  const aligned = plane.label === "X-Y" ? [] : alignedDimensionItems(model, plane);
+  return aligned.length ? aligned : gridDimensionItems(model, plane);
+}
+
+// Grid lines of a plan dimension view (e.g. 通り芯_屋根) brought onto any sheet:
+// a horizontal sheet clips them to its members, an elevation or inclined sheet
+// draws each grid where its vertical plane cuts the sheet. Grid names come
+// from the view's text items (nearest line end) and a dimension chain is added
+// along the bottom (and the left for grids running across the sheet).
+function gridDimensionItems(model, plane) {
+  const segments = elementsOnPlane(model, plane);
+  if (!segments.length) return [];
+  const uv = segments.flatMap(({ a, b }) => [planePoint(plane, a), planePoint(plane, b)]);
+  const [minU, maxU] = rangeOf(uv.map((p) => p[0])), [minV, maxV] = rangeOf(uv.map((p) => p[1]));
+  const margin = Math.max(maxU - minU, maxV - minV, 1) * 0.06;
+  const box = { u: [minU - margin, maxU + margin], v: [minV - margin, maxV + margin] };
+  const horizontal = plane.label === "X-Y";
+  let best = null;
+  for (const view of model.dimensions.values()) {
+    const grids = viewGrids(view);
+    const lines = horizontal ? clipGrids(plane, grids, box, margin) : crossGrids(plane, grids, box, margin);
+    const score = lines.filter((line) => line.text).length * 1000 + lines.length;
+    if (lines.length && (!best || score > best.score)) best = { view, lines, score };
+  }
+  if (!best) return [];
+  const to3 = (u, v) => plane.origin.map((o, i) => o + u * plane.u[i] + v * plane.v[i]);
+  const items = [];
+  for (const line of best.lines) {
+    items.push({ type: 0, grid: true, text: "", viewName: best.view.name, a: to3(line.u0, line.v0), b: to3(line.u1, line.v1) });
+    if (line.text) items.push({ type: 1, text: line.text, viewName: best.view.name, a: to3(line.lu, line.lv), b: to3(line.lu + margin * 0.01, line.lv) });
+  }
+  // Dimension chains: grids running up the sheet are measured along the
+  // bottom, grids running across it along the left edge.
+  const chain = (lines, fixed, along) => {
+    const stations = lines.map((line) => {
+      const [p0, p1] = along === "u" ? [[line.u0, line.v0], [line.u1, line.v1]] : [[line.v0, line.u0], [line.v1, line.u1]];
+      const t = (fixed - p0[1]) / (p1[1] - p0[1]);
+      return p0[0] + (p1[0] - p0[0]) * t;
+    }).filter(Number.isFinite).sort((a, b) => a - b).filter((value, i, all) => !i || value - all[i - 1] > 1e-6 * margin);
+    for (let i = 1; i < stations.length; i++) {
+      const [a, b] = along === "u" ? [to3(stations[i - 1], fixed), to3(stations[i], fixed)] : [to3(fixed, stations[i - 1]), to3(fixed, stations[i])];
+      items.push({ type: 2, text: formatLength(stations[i] - stations[i - 1]), viewName: best.view.name, a, b });
+    }
+  };
+  chain(best.lines.filter((l) => Math.abs(l.u1 - l.u0) < Math.abs(l.v1 - l.v0)), minV - margin * 0.5, "u");
+  chain(best.lines.filter((l) => Math.abs(l.u1 - l.u0) >= Math.abs(l.v1 - l.v0)), minU - margin * 0.5, "v");
+  return items;
+}
+
+function formatLength(value) {
+  return Math.abs(value) >= 100 ? Math.round(value).toLocaleString("en-US") : value.toFixed(3);
+}
+
+function viewGrids(view) {
+  const lines = view.items.filter((item) => item.type === 0).map((item) => ({
+    a: dimensionPoint(view, item.start), b: dimensionPoint(view, item.end), text: "", labelAtStart: false,
+  })).filter(({ a, b }) => Math.hypot(b[0] - a[0], b[1] - a[1]) > 1e-9);
+  for (const item of view.items) {
+    if (item.type !== 1 || !item.text.trim() || !lines.length) continue;
+    const p = dimensionPoint(view, item.start);
+    let nearest = null;
+    for (const line of lines) for (const atStart of [true, false]) {
+      const end = atStart ? line.a : line.b, distance = Math.hypot(end[0] - p[0], end[1] - p[1]);
+      if (!nearest || distance < nearest.distance) nearest = { line, atStart, distance };
+    }
+    if (!nearest.line.text) Object.assign(nearest.line, { text: item.text.trim(), labelAtStart: nearest.atStart });
+  }
+  return lines;
+}
+
+// Clip grids to the sheet box in plane coordinates (Liang-Barsky).
+function clipGrids(plane, grids, box, margin) {
+  return grids.flatMap((grid) => {
+    const [u0, v0] = planePoint(plane, grid.a), [u1, v1] = planePoint(plane, grid.b);
+    const du = u1 - u0, dv = v1 - v0;
+    let t0 = 0, t1 = 1;
+    for (const [p, q] of [[-du, u0 - box.u[0]], [du, box.u[1] - u0], [-dv, v0 - box.v[0]], [dv, box.v[1] - v0]]) {
+      if (Math.abs(p) < 1e-12) { if (q < 0) return []; continue; }
+      const r = q / p;
+      if (p < 0) t0 = Math.max(t0, r); else t1 = Math.min(t1, r);
+    }
+    if (t0 >= t1) return [];
+    const line = { u0: u0 + du * t0, v0: v0 + dv * t0, u1: u0 + du * t1, v1: v0 + dv * t1, text: grid.text };
+    if (grid.text) {
+      const length = Math.hypot(du, dv) || 1, out = grid.labelAtStart ? -1 : 1;
+      const [eu, ev] = grid.labelAtStart ? [line.u0, line.v0] : [line.u1, line.v1];
+      Object.assign(line, { lu: eu + out * du / length * margin * 0.35, lv: ev + out * dv / length * margin * 0.35 });
+    }
+    return [line];
+  });
+}
+
+// Where the vertical plane through each plan grid cuts an elevation or
+// inclined sheet, from the bottom to the top of the sheet box.
+function crossGrids(plane, grids, box, margin) {
+  const cross2 = (a, b) => a[0] * b[1] - a[1] * b[0];
+  return grids.flatMap((grid) => {
+    const d = [grid.b[0] - grid.a[0], grid.b[1] - grid.a[1]], length = Math.hypot(...d);
+    const denominator = cross2([plane.u[0], plane.u[1]], d);
+    if (Math.abs(denominator) < 0.2 * length * Math.hypot(plane.u[0], plane.u[1])) return [];
+    const uAt = (v) => -cross2([plane.origin[0] + v * plane.v[0] - grid.a[0], plane.origin[1] + v * plane.v[1] - grid.a[1]], d) / denominator;
+    const [v0, v1] = box.v, u0 = uAt(v0), u1 = uAt(v1);
+    const um = uAt((v0 + v1) / 2), vm = (v0 + v1) / 2;
+    const p = [0, 1].map((i) => plane.origin[i] + um * plane.u[i] + vm * plane.v[i]);
+    const s = ((p[0] - grid.a[0]) * d[0] + (p[1] - grid.a[1]) * d[1]) / (length * length);
+    if (s < -0.02 || s > 1.02 || um < box.u[0] || um > box.u[1]) return [];
+    return [{ u0, v0, u1, v1, text: grid.text, lu: u0, lv: v0 - margin * 0.35 }];
+  });
+}
+
+function alignedDimensionItems(model, plane) {
   const preferredName = plane.type === 3 ? "軸1" : plane.type === 4 ? "軸2" : "";
   const candidates = [...model.dimensions.values()].map((candidate) => {
     const origin = dimensionPoint(candidate, [0, 0, 0]);
@@ -665,42 +806,29 @@ function dimensionItemsForPlane(model, plane) {
   // The dimension view is registered for the whole elevation. Filtering it by
   // the extents of the current members discarded distant grid names such as
   // い・ろ・は even though those labels existed in *DIMENSION-LINETEXT.
-  const items = view.items.map((item) => ({
+  return view.items.map((item) => ({
     ...item, viewName: view.name,
     a: dimensionPoint(view, item.start), b: dimensionPoint(view, item.end),
   }));
-  // A quarter keeps only the grid lines and names of its own area so the
-  // sheet zooms in on that quarter.
-  return plane.part ? items.filter(({ a, b }) => inPart(plane, a.map((x, i) => (x + b[i]) / 2))) : items;
 }
 
-// Key plan for the lower-right corner: every line element in plan (X-Y) in
-// grey, the members drawn on this sheet in red.
-function keyPlanSvg(model, plane, box) {
-  if (!model.planBounds) {
-    const used = model.elements.flatMap((element) => element.nodes.map((id) => model.nodes.get(id)).filter(Boolean));
-    model.planBounds = { x: rangeOf(used.map((p) => p[0])), y: rangeOf(used.map((p) => p[1])) };
-  }
-  const { x: [minX, maxX], y: [minY, maxY] } = model.planBounds;
-  const pad = 6, w = box.width - pad * 2, h = box.height - pad * 2 - 10;
-  const fit = Math.min(w / (maxX - minX || 1), h / (maxY - minY || 1));
-  const x0 = box.x + pad + (w - (maxX - minX) * fit) / 2, y0 = box.y + 10 + pad + (h - (maxY - minY) * fit) / 2;
-  const at = (p) => `${(x0 + (p[0] - minX) * fit).toFixed(1)},${(y0 + (maxY - p[1]) * fit).toFixed(1)}`;
-  const onSheet = new Set(elementsOnPlane(model, plane).map(({ element }) => element.id));
-  let grey = "", red = "";
-  for (const element of model.elements) {
-    const a = model.nodes.get(element.nodes[0]), b = model.nodes.get(element.nodes[1]);
-    if (!a || !b) continue;
-    const segment = `M${at(a)}L${at(b)}`;
-    if (onSheet.has(element.id)) red += segment; else grey += segment;
-  }
-  return `<g class="key-plan">
-    <rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" fill="#fff" stroke="#3e4642" stroke-width=".5"/>
-    <text x="${box.x + 4}" y="${box.y + 9}" font-family="Arial,'Noto Sans JP',sans-serif" font-size="7" fill="#171a18">KEY PLAN</text>
-    <path d="${grey}" stroke="#b7c0bc" stroke-width=".35" fill="none"/>
-    <path d="${red}" stroke="#e0432f" stroke-width="1.1" fill="none" stroke-linecap="round"/>
-  </g>`;
+// A dimension chain segment on the sheet: the line, two ticks and the length
+// written above it.
+function dimensionChainSvg(A, B, text) {
+  const dx = B[0] - A[0], dy = B[1] - A[1], length = Math.hypot(dx, dy) || 1;
+  const nx = -dy / length * 3, ny = dx / length * 3;
+  let angle = Math.atan2(dy, dx) * 180 / Math.PI;
+  if (angle > 90 || angle < -90) angle += 180;
+  const above = memberAboveNormal(dx, dy);
+  const x = (A[0] + B[0]) / 2 + above[0] * 3, y = (A[1] + B[1]) / 2 + above[1] * 3;
+  const tick = (P) => `<line x1="${(P[0] - nx).toFixed(1)}" y1="${(P[1] - ny).toFixed(1)}" x2="${(P[0] + nx).toFixed(1)}" y2="${(P[1] + ny).toFixed(1)}" class="dimension-line"/>`;
+  return {
+    line: `<line x1="${A[0].toFixed(1)}" y1="${A[1].toFixed(1)}" x2="${B[0].toFixed(1)}" y2="${B[1].toFixed(1)}" class="dimension-line"/>${tick(A)}${tick(B)}`,
+    x, y, angle,
+  };
 }
+
+const gridDash = ' stroke-dasharray="9 2 1.5 2"';
 
 function rangeOf(values, fallback = [0, 1]) {
   if (!values.length) return fallback;
@@ -791,10 +919,6 @@ function memberStressLabels(model, plane, memberData, valueMode) {
   return labels;
 }
 
-function showKeyPlan(options) {
-  return options.showKeyPlan ?? $("#showKeyPlan")?.checked ?? true;
-}
-
 function numberingDiagramSvg(plane, kind, options = {}) {
   const model = app.model?.parsed;
   if (!model || !plane || typeof plane === "string") return "";
@@ -802,7 +926,7 @@ function numberingDiagramSvg(plane, kind, options = {}) {
   const width = 1200, height = 590, frame = $("#frame")?.value !== "off";
   const dimensionEnabled = options.showDimensions ?? $("#showDimensions")?.checked ?? true;
   const dimensionItems = dimensionEnabled ? dimensionItemsForPlane(model, plane) : [];
-  const chartLeft = 190, chartRight = 1040, chartTop = 160, chartBottom = 413;
+  const chartLeft = 90, chartRight = 1110, chartTop = 78, chartBottom = 515;
   const bounds = drawingFit([...segments.flatMap(({ a, b }) => [a, b]), ...dimensionItems.flatMap(({ a, b }) => [a, b])], plane,
     { left: chartLeft, right: chartRight, top: chartTop, bottom: chartBottom }, options.scale || $("#scale")?.value || 1);
   const { minU, maxZ, fit, x0, y0 } = bounds;
@@ -827,8 +951,12 @@ function numberingDiagramSvg(plane, kind, options = {}) {
   const dimensionLines = [], dimensionLabels = [];
   for (const item of dimensionItems) {
     const a = pt2(item.a), b = pt2(item.b);
-    if (item.type === 0) dimensionLines.push(`<line x1="${a[0].toFixed(1)}" y1="${a[1].toFixed(1)}" x2="${b[0].toFixed(1)}" y2="${b[1].toFixed(1)}" class="dimension-line"/>`);
-    else if (item.text.trim()) {
+    if (item.type === 0) dimensionLines.push(`<line x1="${a[0].toFixed(1)}" y1="${a[1].toFixed(1)}" x2="${b[0].toFixed(1)}" y2="${b[1].toFixed(1)}" class="dimension-line"${item.grid ? gridDash : ""}/>`);
+    else if (item.type === 2) {
+      const chain = dimensionChainSvg(a, b, item.text);
+      dimensionLines.push(chain.line);
+      dimensionLabels.push(`<text x="${chain.x.toFixed(1)}" y="${chain.y.toFixed(1)}" text-anchor="middle" transform="rotate(${chain.angle.toFixed(1)} ${chain.x.toFixed(1)} ${chain.y.toFixed(1)})">${escapeHtml(item.text)}</text>`);
+    } else if (item.text.trim()) {
       let angle = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
       if (angle > 90 || angle < -90) angle += 180;
       const x = (a[0] + b[0]) / 2, y = (a[1] + b[1]) / 2;
@@ -878,7 +1006,6 @@ function numberingDiagramSvg(plane, kind, options = {}) {
     <g>${dimensionLines.join("")}</g><g>${memberLines.join("")}</g>
     <g class="member-end-dots">${memberEndDots.join("")}</g>
     <g class="dimension-label">${dimensionLabels.join("")}</g><g class="number-label">${numberLabels.join("")}</g>
-    ${showKeyPlan(options) ? keyPlanSvg(model, plane, { x: 990, y: 421, width: 140, height: 104 }) : ""}
     <text x="70" y="556" class="sheet-title">${escapeHtml(lineName)}　${diagramName}</text>
   </svg>`;
 }
@@ -947,7 +1074,7 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
   const diagramFill = options.diagramFill || $("#diagramFill")?.value || "solid";
   const chartLeft = legendPosition === "left" ? 224 : 80;
   const chartRight = legendPosition === "left" ? 1124 : 986;
-  const chartTop = 160, chartBottom = 413;
+  const chartTop = 78, chartBottom = 515;
   const drawW = chartRight - chartLeft, drawH = chartBottom - chartTop;
   const basePoints = [...planeMembers.flatMap(({ a, b }) => [a, b]), ...dimensionItems.flatMap(({ a, b }) => [a, b])];
   const bounds = drawingFit(basePoints, plane, { left: chartLeft, right: chartRight, top: chartTop, bottom: chartBottom });
@@ -994,7 +1121,13 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
   const dimensionLines = [], dimensionLabels = [];
   for (const item of dimensionItems) {
     const A = pt2(item.a), B = pt2(item.b);
-    if (item.type === 0) { dimensionLines.push(`<line x1="${A[0].toFixed(1)}" y1="${A[1].toFixed(1)}" x2="${B[0].toFixed(1)}" y2="${B[1].toFixed(1)}" class="dimension-line"/>`); continue; }
+    if (item.type === 0) { dimensionLines.push(`<line x1="${A[0].toFixed(1)}" y1="${A[1].toFixed(1)}" x2="${B[0].toFixed(1)}" y2="${B[1].toFixed(1)}" class="dimension-line"${item.grid ? gridDash : ""}/>`); continue; }
+    if (item.type === 2) {
+      const chain = dimensionChainSvg(A, B, item.text);
+      dimensionLines.push(chain.line);
+      registerText(dimensionLabels, item.text, chain.x, chain.y, chain.angle, "dimension-text", true);
+      continue;
+    }
     if (!item.text.trim()) continue;
     let angle = Math.atan2(B[1] - A[1], B[0] - A[0]) * 180 / Math.PI;
     if (angle > 90 || angle < -90) angle += 180;
@@ -1093,7 +1226,7 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
     ${palette.map((color, index) => `<rect x="${barX}" y="${(barY + index * cellH).toFixed(2)}" width="${barW}" height="${(cellH + 0.25).toFixed(2)}" fill="${color}" stroke="#38413d" stroke-width=".24"/>`).join("")}
     ${ranks.map((value, index) => `<line x1="${barX - 2}" y1="${(barY + index * cellH).toFixed(2)}" x2="${barX + barW + 3}" y2="${(barY + index * cellH).toFixed(2)}" class="rank-tick"/><text x="${barX + barW + 53}" y="${(barY + (index + .68) * cellH).toFixed(1)}" class="rank-label">${rankLabel(value)}</text>`).join("")}
     <line x1="${metaX}" y1="381" x2="${metaX + 174}" y2="381" class="legend-rule"/>
-    <text x="${metaX + 4}" y="373" class="legend-meta">CB: ${escapeHtml(loadCase)}</text>
+    <text x="${metaX + 4}" y="373" class="legend-meta">CB: ${escapeHtml(caseLabel(loadCase))}</text>
     <text x="${metaX + 4}" y="390" class="legend-meta">MAX : ${escapeHtml(maxRecord?.id ?? "—")}</text>
     <text x="${metaX + 4}" y="407" class="legend-meta">MIN : ${escapeHtml(minRecord?.id ?? "—")}</text>
     <text x="${metaX + 4}" y="424" class="legend-meta">FILE:</text>
@@ -1128,7 +1261,6 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
       ? `<line x1="${legendDividerX.toFixed(2)}" y1="58" x2="${legendDividerX.toFixed(2)}" y2="531" class="legend-divider"/>`
       : `<rect x="${legendPanelLeft.toFixed(2)}" y="58" width="${(legendPanelRight - legendPanelLeft).toFixed(2)}" height="473" class="legend-frame"/>`}
     <g transform="translate(${legendPanelTranslateX.toFixed(2)} 0) scale(${legendPanelScaleX.toFixed(5)} 1)">${legend}</g>
-    ${showKeyPlan(options) ? keyPlanSvg(model, plane, { x: legendPosition === "left" ? 990 : 854, y: 421, width: 140, height: 104 }) : ""}
     <text x="64" y="547" class="drawing-title">${escapeHtml(sheetTitle.line)}</text>
     <text x="64" y="565" class="drawing-title">${escapeHtml(sheetTitle.detail)}</text>
   </svg>`;
@@ -1157,7 +1289,7 @@ function updatePreview() {
   $("#workspace").classList.toggle("numbering-mode", numbering);
   $("#workspace").classList.toggle("member-mode", choice.mode === "member");
   $("#previewPlane").textContent = app.data.synthetic ? choice.plane : (app.data.planes[app.previewPlane]?.name || "未選択");
-  $("#previewCase").textContent = choice.loadCase;
+  $("#previewCase").textContent = caseLabel(choice.loadCase);
   $("#previewComponent").textContent = componentLabel(numbering ? choice.mode : choice.comp);
   const plane = app.data.synthetic ? choice.plane : app.data.planes[app.previewPlane];
   const title = drawingTitle(plane, choice.loadCase, numbering ? choice.mode : choice.comp);
@@ -1268,7 +1400,7 @@ function downloadSvg() {
   const blob = new Blob([`<?xml version="1.0" encoding="UTF-8"?>\n${svg}`], { type: "image/svg+xml;charset=utf-8" });
   const planeName = typeof plane === "string" ? plane : plane.name;
   saveFile(choice.mode === "stress"
-    ? `${safeFilename(planeName)}_${safeFilename(choice.loadCase)}_${choice.comp}.svg`
+    ? `${safeFilename(planeName)}_${safeFilename(caseLabel(choice.loadCase))}_${choice.comp}.svg`
     : `${safeFilename(planeName)}_${choice.mode === "member" ? "部材番号" : "断面番号"}.svg`, blob);
 }
 
@@ -1388,7 +1520,7 @@ for (const [inputId, nameId, kind] of [["modelInput", "modelName", "model"], ["r
 document.addEventListener("change", (event) => {
   if (event.target.matches('input[name="diagramType"]')) syncFontSizeForMode();
   if (event.target.matches('#labelFontSize')) app.fontSizes[app.fontSizeMode] = event.target.value;
-  if (event.target.matches('input[data-kind], input[name="diagramType"], input[name="component"], #bothNumberTypes, #titleLine, #scale, #frame, #valueMode, #showDimensions, #showKeyPlan, #showMemberEnds, #memberEndSize, #memberEndInset, #hideOverlaps, #contourColors, #legendPosition, #decimalPlaces, #rankDecimals, #diagramFill, #labelOrientation, #labelOffsetMm, #fontFamily, #labelFontSize, #legendFontSize, #fontWeight, #valueColor, #dimensionLineWidth, #dimensionColor, #labelLimitPercent')) refresh();
+  if (event.target.matches('input[data-kind], input[name="diagramType"], input[name="component"], #bothNumberTypes, #titleLine, #scale, #frame, #valueMode, #showDimensions, #showMemberEnds, #memberEndSize, #memberEndInset, #hideOverlaps, #contourColors, #legendPosition, #decimalPlaces, #rankDecimals, #diagramFill, #labelOrientation, #labelOffsetMm, #fontFamily, #labelFontSize, #legendFontSize, #fontWeight, #valueColor, #dimensionLineWidth, #dimensionColor, #labelLimitPercent')) refresh();
   if (event.target.matches("#orientation")) document.body.classList.toggle("print-portrait", event.target.value === "portrait");
 });
 $("#caseAll").addEventListener("click", () => useAll("case"));
