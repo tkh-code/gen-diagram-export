@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f5f7f6" />
+    <title>GEN 図面 一括出力</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="GEN 図面 一括出力">
+        <span class="brand-mark">G</span>
+        <span>GEN <span class="brand-light">図面 一括出力</span></span>
+        <span class="prototype-tag">非公式ツール</span>
+      </a>
+      <span class="privacy"><i></i> ファイルはこのブラウザー内で処理</span>
+    </header>
+
+    <main id="top" class="app-shell">
+      <section class="intro">
+        <p class="eyebrow">MIDAS GEN NX 形式対応 · ブラウザー内で処理</p>
+        <h1>応力図と番号図を、まとめて出力。</h1>
+        <p class="intro-copy">登録平面ごとに応力図・部材番号図・断面番号図を作成します。番号図はMGTXだけで利用できます。</p>
+      </section>
+
+      <section class="card input-card" aria-labelledby="files-title">
+        <div class="card-heading">
+          <div>
+            <span class="step">01</span>
+            <h2 id="files-title">モデル・解析ファイルを読み込む</h2>
+          </div>
+          <button id="demoButton" class="text-button" type="button">サンプルで試す <span aria-hidden="true">↗</span></button>
+        </div>
+        <div class="file-grid">
+          <label class="file-drop" id="modelDrop" for="modelInput">
+            <span class="file-icon">M</span>
+            <span class="file-title">モデルファイル <span class="required">必須</span></span>
+            <span class="file-subtitle">MGTX / MGT</span>
+            <span class="file-selection" id="modelName">クリックまたはドラッグ＆ドロップ</span>
+            <input id="modelInput" type="file" accept=".mgtx,.mgt,.txt" />
+          </label>
+          <label class="file-drop" id="resultDrop" for="resultInput">
+            <span class="file-icon result-icon">A</span>
+            <span class="file-title">解析結果ファイル <span class="required">応力図のみ必須</span></span>
+            <span class="file-subtitle">ANL / TXT</span>
+            <span class="file-selection" id="resultName">クリックまたはドラッグ＆ドロップ</span>
+            <input id="resultInput" type="file" accept=".anl,.txt,.out" />
+          </label>
+        </div>
+        <div id="readStatus" class="read-status" role="status" aria-live="polite">
+          <span class="status-dot"></span><span>MGTXを選択してください。応力図にはANLも必要です。</span>
+        </div>
+        <details class="privacy-note">
+          <summary>ファイルの扱いについて</summary>
+          <p>選択したファイルはこのページ内で読み取ります。サーバーへのアップロードや外部送信は行いません。対応していない書式のファイルは読み取れない場合があります。</p>
+        </details>
+      </section>
+
+      <section id="workspace" class="workspace hidden" aria-label="出力設定とプレビュー">
+        <div class="settings-column">
+          <section class="card settings-card">
+            <div class="card-heading compact-heading">
+              <div><span class="step">02</span><h2>出力する図を選ぶ</h2></div>
+            </div>
+            <div class="setting-block">
+              <h3>図の種類</h3>
+              <div class="component-list diagram-type-list">
+                <label class="component-choice"><input type="radio" name="diagramType" value="stress" checked /><span><b>応力図</b><small>ANLが必要</small></span></label>
+                <label class="component-choice"><input type="radio" name="diagramType" value="member" /><span><b>部材番号</b><small>MGTXのみ</small></span></label>
+                <label class="component-choice"><input type="radio" name="diagramType" value="section" /><span><b>断面番号</b><small>MGTXのみ</small></span></label>
+              </div>
+            </div>
+            <div id="caseBlock" class="setting-block">
+              <div class="setting-label-row"><h3>応力ケース</h3><button class="mini-button" id="caseAll" type="button">すべて</button></div>
+              <div id="caseList" class="choice-list"></div>
+            </div>
+            <div class="setting-block">
+              <div class="setting-label-row"><h3>登録平面</h3><button class="mini-button" id="planeAll" type="button">すべて</button></div>
+              <div id="planeList" class="choice-list"></div>
+              <p id="planeHint" class="hint"></p>
+            </div>
+            <div id="componentBlock" class="setting-block">
+              <h3>応力成分</h3>
+              <div id="componentList" class="component-list">
+                <label class="component-choice"><input type="radio" name="component" value="MY" checked /><span><b>M-y</b><small>曲げモーメント</small></span></label>
+                <label class="component-choice"><input type="radio" name="component" value="MZ" /><span><b>M-z</b><small>曲げモーメント</small></span></label>
+                <label class="component-choice"><input type="radio" name="component" value="QY" /><span><b>Q-y</b><small>せん断力</small></span></label>
+                <label class="component-choice"><input type="radio" name="component" value="QZ" /><span><b>Q-z</b><small>せん断力</small></span></label>
+                <label class="component-choice"><input type="radio" name="component" value="N" /><span><b>N</b><small>軸力</small></span></label>
+              </div>
+            </div>
+            <div class="setting-block">
+              <h3>図面タイトル</h3>
+              <div class="title-fields">
+                <label>通り名（空欄なら登録平面から自動）<input id="titleLine" type="text" placeholder="例：い通り" /></label>
+              </div>
+              <p class="hint">通り名と図種を2段で表示します。応力図のみ荷重ケースを併記します。</p>
+              <p id="titlePreview" class="hint title-preview">い通り<br />My図 (TL)</p>
+            </div>
+            <details class="advanced-settings">
+              <summary>詳細設定</summary>
+              <div class="advanced-fields">
+                <label>用紙方向<select id="orientation"><option value="landscape">横向き（A4）</option><option value="portrait">縦向き（A4）</option></select></label>
+                <label>図の倍率（用紙内で自動調整）<select id="scale"><option value="1">標準</option><option value="1.25">大きめ</option><option value="0.8">小さめ</option></select></label>
+                <label>図枠<select id="frame"><option value="on">あり</option><option value="off">なし</option></select></label>
+                <label class="stress-only"><span>図の塗り方</span><select id="diagramFill"><option value="solid" selected>ソリッド塗り</option><option value="line">ライン塗り</option><option value="none">塗りなし</option></select></label>
+                <label class="stress-only"><span>数値表示（単一部材ごと）</span><select id="valueMode"><option value="abs" selected>絶対最大値（部材中央付近）</option><option value="three">3点（部材I・中央・J）</option><option value="all">All（部材I・絶対最大・J）</option><option value="minmax">最小・最大（発生位置）</option><option value="five">5点（部材全長）</option><option value="none">表示しない</option></select></label>
+                <label class="stress-only"><span>凡例位置</span><select id="legendPosition"><option value="right" selected>右側</option><option value="left">左側</option></select></label>
+                <label class="stress-only"><span>コンター階調</span><select id="contourColors"><option value="6">6色</option><option value="12" selected>12色</option><option value="18">18色</option><option value="24">24色</option></select></label>
+                <label class="stress-only"><span>値の小数桁</span><select id="decimalPlaces"><option value="0">0桁</option><option value="1" selected>1桁</option><option value="2">2桁</option><option value="3">3桁</option><option value="4">4桁</option></select></label>
+                <label class="stress-only"><span>凡例の小数桁</span><select id="rankDecimals"><option value="0">0桁</option><option value="1">1桁</option><option value="2" selected>2桁</option><option value="3">3桁</option><option value="4">4桁</option></select></label>
+                <label>数値の向き<select id="labelOrientation"><option value="auto" selected>部材に対して自動</option><option value="0">水平 0°</option><option value="45">45°</option><option value="90">90°</option><option value="-45">-45°</option></select></label>
+                <label>数値の離れ<select id="labelOffsetMm"><option value="0">0 mm</option><option value="0.6" selected>0.6 mm</option><option value="1.2">1.2 mm</option><option value="2">2 mm</option><option value="3">3 mm</option></select></label>
+                <label>文字フォント<select id="fontFamily"><option value="arialNarrow" selected>Arial Narrow（GEN風）</option><option value="arial">Arial</option><option value="msGothic">MS ゴシック</option><option value="msMincho">明朝体（游明朝 / MS 明朝）</option><option value="meiyo">Meiryo UI</option><option value="noto">Noto Sans JP</option></select></label>
+                <label>文字サイズ<select id="labelFontSize"><option value="4">4 pt</option><option value="5">5 pt</option><option value="6">6 pt</option><option value="7">7 pt</option><option value="8" selected>8 pt</option><option value="9">9 pt</option><option value="10">10 pt</option><option value="12">12 pt</option><option value="14">14 pt</option></select></label>
+                <label class="stress-only"><span>凡例文字サイズ</span><select id="legendFontSize"><option value="5">5 pt</option><option value="6">6 pt</option><option value="7">7 pt</option><option value="8" selected>8 pt</option><option value="9">9 pt</option><option value="10">10 pt</option><option value="12">12 pt</option></select></label>
+                <label>文字の太さ<select id="fontWeight"><option value="normal" selected>標準</option><option value="bold">太字</option></select></label>
+                <label>文字色<input id="valueColor" type="color" value="#171a18" /></label>
+                <label>寸法線の太さ<select id="dimensionLineWidth"><option value="0.15">極細</option><option value="0.2" selected>細</option><option value="0.3">標準</option><option value="0.5">太</option></select></label>
+                <label>寸法線の色<input id="dimensionColor" type="color" value="#c9cfcc" /></label>
+                <label class="stress-only"><span>数値表示の下限</span><select id="labelLimitPercent"><option value="0" selected>すべて</option><option value="5">最大の5%以上</option><option value="10">最大の10%以上</option><option value="25">最大の25%以上</option><option value="50">最大の50%以上</option></select></label>
+              </div>
+              <p class="hint stress-only">数値の実精度はANLファイルの桁数までです。元データが小数1桁の場合、2桁以上で表示しても精度は増えません。</p>
+              <label class="check-setting"><input id="showDimensions" type="checkbox" checked /> 寸法線・寸法文字を重ねる</label>
+              <label class="check-setting member-only"><input id="showMemberEnds" type="checkbox" checked /> 単一部材の両端にオレンジ●を表示</label>
+              <label class="member-only">端点●の直径<select id="memberEndSize"><option value="0.5">0.5 mm</option><option value="0.8" selected>0.8 mm</option><option value="1.2">1.2 mm</option><option value="1.6">1.6 mm</option><option value="2">2 mm</option></select></label>
+              <label class="member-only">部材端から内側への距離<select id="memberEndInset"><option value="0.5">0.5 mm</option><option value="1" selected>1 mm</option><option value="1.5">1.5 mm</option><option value="2">2 mm</option><option value="3">3 mm</option></select></label>
+              <label class="check-setting"><input id="hideOverlaps" type="checkbox" /> 重なる数値だけ非表示（初期値は全表示）</label>
+            </details>
+            <div class="output-actions">
+              <label class="check-setting numbering-only"><input id="bothNumberTypes" type="checkbox" /> 部材番号と断面番号を続けて印刷（PDFと同じ順序）</label>
+              <button id="printButton" class="primary-button" type="button">選択した図をまとめて印刷 / PDF</button>
+              <button id="svgButton" class="secondary-button" type="button">この図を SVG 保存</button>
+              <p id="outputCount" class="hint centered-hint">出力する図を選択してください</p>
+            </div>
+          </section>
+          <p id="prototypeDisclaimer" class="prototype-disclaimer"><span>!</span> サンプル図は架空データです。実構造物の検討・設計には使用できません。</p>
+        </div>
+
+        <section class="card preview-card" aria-labelledby="preview-title">
+          <div class="preview-heading">
+            <div><span class="step">PREVIEW</span><h2 id="preview-title">出力プレビュー</h2></div>
+            <span id="previewBadge" class="demo-badge">サンプル</span>
+          </div>
+          <div class="preview-meta"><span id="previewPlane">—</span><span id="previewCase">—</span><span id="previewComponent">MY · 曲げモーメント</span></div>
+          <div id="diagramHost" class="diagram-host"></div>
+          <p id="coverageStatus" class="hint" aria-live="polite"></p>
+          <div class="preview-footer"><span id="modelStats">—</span><span>SVGベクター描画</span></div>
+        </section>
+      </section>
+
+      <footer class="app-footer"><span>GEN 図面 一括出力 · v1.2</span><span>非公式ツール · 出力図は GEN NX の原図と照合してください</span></footer>
+    </main>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="./app.js?v=1.4.0"></script>
+  </body>
+</html>
