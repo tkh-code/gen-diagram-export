@@ -200,11 +200,49 @@ function parseModel(text) {
     view.items.push({ type, text: c[2] || "", height: Number.isFinite(height) ? height : 0, start: coordinates.slice(0, 3), end: coordinates.slice(3, 6) });
   }
   const sectionCount = rows("SECTION").filter((line) => splitCsv(line).length > 1).length;
-  return { nodes, elements, members, memberByElement, constraints, releases, planes, dimensions, sectionCount, sectionNames: [...sections.keys()] };
+  const model = { nodes, elements, members, memberByElement, constraints, releases, planes, dimensions, sectionCount, sectionNames: [...sections.keys()] };
+  model.planes = planes.flatMap((plane) => [plane, ...quarterPlanes(model, plane)]);
+  return model;
+}
+
+// A horizontal plane (a ring or a whole roof in plan) is too large for one
+// sheet, so it is also offered as four quarters split at the centre of its
+// members. Each element belongs to the quarter holding its midpoint.
+function quarterPlanes(model, plane) {
+  if (plane.label !== "X-Y") return [];
+  const points = elementsOnPlane(model, plane).flatMap(({ a, b }) => [planePoint(plane, a), planePoint(plane, b)]);
+  if (points.length < 4) return [];
+  const [minU, maxU] = rangeOf(points.map((p) => p[0])), [minV, maxV] = rangeOf(points.map((p) => p[1]));
+  const cu = (minU + maxU) / 2, cv = (minV + maxV) / 2;
+  return [
+    ["① 左上", [-Infinity, cu], [cv, Infinity]], ["② 右上", [cu, Infinity], [cv, Infinity]],
+    ["③ 左下", [-Infinity, cu], [-Infinity, cv]], ["④ 右下", [cu, Infinity], [-Infinity, cv]],
+  ].map(([label, u, v]) => ({ ...plane, name: `${plane.name} ${label}`, titleName: plane.name, partLabel: label, part: { u, v } }));
+}
+
+function inPart(plane, point) {
+  const [u, v] = planePoint(plane, point), { part } = plane;
+  return u >= part.u[0] && u < part.u[1] && v >= part.v[0] && v < part.v[1];
 }
 
 const pointNames = new Set(["I", "J", "CNT", "1/4", "3/4"]);
 const floatToken = (value) => /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[Ee][-+]?\d+)?$/.test(value || "");
+
+// GEN NX writes some ANL tables in CP949 (Korean) while the rest is Shift_JIS,
+// so "Σ" (CP949 A5 D2) is read back as half-width kana "･ﾒ" and one load case
+// splits in two. Half-width kana are single Shift_JIS bytes, so such a run is
+// turned back into its bytes and decoded as CP949 when that decodes cleanly.
+const cp949 = (() => { try { return new TextDecoder("euc-kr", { fatal: true }); } catch { return null; } })();
+const caseNameCache = new Map();
+function koreanCaseName(name) {
+  if (!cp949 || !/[｡-ﾟ]/.test(name)) return name;
+  if (caseNameCache.has(name)) return caseNameCache.get(name);
+  const fixed = name.replace(/[｡-ﾟ]{2,}/g, (run) => {
+    try { return cp949.decode(Uint8Array.from([...run].map((c) => c.charCodeAt(0) - 0xFF61 + 0xA1))); } catch { return run; }
+  });
+  caseNameCache.set(name, fixed);
+  return fixed;
+}
 
 function parseAnl(text) {
   const lines = text.split(/\r?\n/);
@@ -216,6 +254,7 @@ function parseAnl(text) {
   const addCase = (name) => { if (name && !caseSet.has(name)) { caseSet.add(name); cases.push(name); } };
   const store = (id, lc, point, values, kind, material, section) => {
     if (!id || !lc || !values.length) return;
+    lc = koreanCaseName(lc);
     addCase(lc);
     let item = elements.get(id);
     if (!item) { item = { id, kind, byCase: new Map() }; elements.set(id, item); }
@@ -398,10 +437,11 @@ function componentLabel(kind) {
 
 function drawingTitle(plane, loadCase, comp) {
   const enteredLine = $("#titleLine")?.value.trim();
-  const rawPlaneName = typeof plane === "string" ? plane : plane?.name || "";
+  const rawPlaneName = typeof plane === "string" ? plane : plane?.titleName || plane?.name || "";
   const inferredLine = rawPlaneName.replace(/^\s*\d+\s*[_＿\-\s　]*/, "").trim();
   let line = enteredLine || inferredLine || "〇";
   if (!line.endsWith("通り")) line += "通り";
+  if (plane?.partLabel) line += `（${plane.partLabel}）`;
   if (comp === "member" || comp === "section") return { line, detail: comp === "member" ? "部材番号" : "断面番号" };
   const diagramCode = ({ MY: "My", MZ: "Mz", QY: "Qy", QZ: "Qz", N: "N" })[comp] || String(comp || "");
   return { line, detail: `${diagramCode}図 (${String(loadCase || "")})` };
@@ -517,6 +557,7 @@ function elementsOnPlane(model, plane) {
     const a = model.nodes.get(element.nodes[0]), b = model.nodes.get(element.nodes[1]);
     if (!a || !b || !/BEAM|TRUSS|TENSTR|COMPTR/i.test(element.type)) return null;
     if (distance(a) > plane.tolerance || distance(b) > plane.tolerance) return null;
+    if (plane.part && !inPart(plane, a.map((x, i) => (x + b[i]) / 2))) return null;
     return { element, a, b };
   }).filter(Boolean);
 }
@@ -620,10 +661,41 @@ function dimensionItemsForPlane(model, plane) {
   // The dimension view is registered for the whole elevation. Filtering it by
   // the extents of the current members discarded distant grid names such as
   // い・ろ・は even though those labels existed in *DIMENSION-LINETEXT.
-  return view.items.map((item) => ({
+  const items = view.items.map((item) => ({
     ...item, viewName: view.name,
     a: dimensionPoint(view, item.start), b: dimensionPoint(view, item.end),
   }));
+  // A quarter keeps only the grid lines and names of its own area so the
+  // sheet zooms in on that quarter.
+  return plane.part ? items.filter(({ a, b }) => inPart(plane, a.map((x, i) => (x + b[i]) / 2))) : items;
+}
+
+// Key plan for the lower-right corner: every line element in plan (X-Y) in
+// grey, the members drawn on this sheet in red.
+function keyPlanSvg(model, plane, box) {
+  if (!model.planBounds) {
+    const used = model.elements.flatMap((element) => element.nodes.map((id) => model.nodes.get(id)).filter(Boolean));
+    model.planBounds = { x: rangeOf(used.map((p) => p[0])), y: rangeOf(used.map((p) => p[1])) };
+  }
+  const { x: [minX, maxX], y: [minY, maxY] } = model.planBounds;
+  const pad = 6, w = box.width - pad * 2, h = box.height - pad * 2 - 10;
+  const fit = Math.min(w / (maxX - minX || 1), h / (maxY - minY || 1));
+  const x0 = box.x + pad + (w - (maxX - minX) * fit) / 2, y0 = box.y + 10 + pad + (h - (maxY - minY) * fit) / 2;
+  const at = (p) => `${(x0 + (p[0] - minX) * fit).toFixed(1)},${(y0 + (maxY - p[1]) * fit).toFixed(1)}`;
+  const onSheet = new Set(elementsOnPlane(model, plane).map(({ element }) => element.id));
+  let grey = "", red = "";
+  for (const element of model.elements) {
+    const a = model.nodes.get(element.nodes[0]), b = model.nodes.get(element.nodes[1]);
+    if (!a || !b) continue;
+    const segment = `M${at(a)}L${at(b)}`;
+    if (onSheet.has(element.id)) red += segment; else grey += segment;
+  }
+  return `<g class="key-plan">
+    <rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" fill="#fff" stroke="#3e4642" stroke-width=".5"/>
+    <text x="${box.x + 4}" y="${box.y + 9}" font-family="Arial,'Noto Sans JP',sans-serif" font-size="7" fill="#171a18">KEY PLAN</text>
+    <path d="${grey}" stroke="#b7c0bc" stroke-width=".35" fill="none"/>
+    <path d="${red}" stroke="#e0432f" stroke-width="1.1" fill="none" stroke-linecap="round"/>
+  </g>`;
 }
 
 function rangeOf(values, fallback = [0, 1]) {
@@ -715,6 +787,10 @@ function memberStressLabels(model, plane, memberData, valueMode) {
   return labels;
 }
 
+function showKeyPlan(options) {
+  return options.showKeyPlan ?? $("#showKeyPlan")?.checked ?? true;
+}
+
 function numberingDiagramSvg(plane, kind, options = {}) {
   const model = app.model?.parsed;
   if (!model || !plane || typeof plane === "string") return "";
@@ -798,6 +874,7 @@ function numberingDiagramSvg(plane, kind, options = {}) {
     <g>${dimensionLines.join("")}</g><g>${memberLines.join("")}</g>
     <g class="member-end-dots">${memberEndDots.join("")}</g>
     <g class="dimension-label">${dimensionLabels.join("")}</g><g class="number-label">${numberLabels.join("")}</g>
+    ${showKeyPlan(options) ? keyPlanSvg(model, plane, { x: 990, y: 421, width: 140, height: 104 }) : ""}
     <text x="70" y="556" class="sheet-title">${escapeHtml(lineName)}　${diagramName}</text>
   </svg>`;
 }
@@ -1047,6 +1124,7 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
       ? `<line x1="${legendDividerX.toFixed(2)}" y1="58" x2="${legendDividerX.toFixed(2)}" y2="531" class="legend-divider"/>`
       : `<rect x="${legendPanelLeft.toFixed(2)}" y="58" width="${(legendPanelRight - legendPanelLeft).toFixed(2)}" height="473" class="legend-frame"/>`}
     <g transform="translate(${legendPanelTranslateX.toFixed(2)} 0) scale(${legendPanelScaleX.toFixed(5)} 1)">${legend}</g>
+    ${showKeyPlan(options) ? keyPlanSvg(model, plane, { x: legendPosition === "left" ? 990 : 854, y: 421, width: 140, height: 104 }) : ""}
     <text x="64" y="547" class="drawing-title">${escapeHtml(sheetTitle.line)}</text>
     <text x="64" y="565" class="drawing-title">${escapeHtml(sheetTitle.detail)}</text>
   </svg>`;
@@ -1306,7 +1384,7 @@ for (const [inputId, nameId, kind] of [["modelInput", "modelName", "model"], ["r
 document.addEventListener("change", (event) => {
   if (event.target.matches('input[name="diagramType"]')) syncFontSizeForMode();
   if (event.target.matches('#labelFontSize')) app.fontSizes[app.fontSizeMode] = event.target.value;
-  if (event.target.matches('input[data-kind], input[name="diagramType"], input[name="component"], #bothNumberTypes, #titleLine, #scale, #frame, #valueMode, #showDimensions, #showMemberEnds, #memberEndSize, #memberEndInset, #hideOverlaps, #contourColors, #legendPosition, #decimalPlaces, #rankDecimals, #diagramFill, #labelOrientation, #labelOffsetMm, #fontFamily, #labelFontSize, #legendFontSize, #fontWeight, #valueColor, #dimensionLineWidth, #dimensionColor, #labelLimitPercent')) refresh();
+  if (event.target.matches('input[data-kind], input[name="diagramType"], input[name="component"], #bothNumberTypes, #titleLine, #scale, #frame, #valueMode, #showDimensions, #showKeyPlan, #showMemberEnds, #memberEndSize, #memberEndInset, #hideOverlaps, #contourColors, #legendPosition, #decimalPlaces, #rankDecimals, #diagramFill, #labelOrientation, #labelOffsetMm, #fontFamily, #labelFontSize, #legendFontSize, #fontWeight, #valueColor, #dimensionLineWidth, #dimensionColor, #labelLimitPercent')) refresh();
   if (event.target.matches("#orientation")) document.body.classList.toggle("print-portrait", event.target.value === "portrait");
 });
 $("#caseAll").addEventListener("click", () => useAll("case"));
