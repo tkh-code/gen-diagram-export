@@ -267,7 +267,11 @@ function parseAnl(text) {
   for (const [title, kind] of [["梁要素の断面力の出力", "beam"], ["トラス要素の断面力の出力", "truss"]]) {
     let start = -1;
     while ((start = lines.findIndex((line, i) => i > start && line.includes(title))) >= 0) {
-      const endMatch = lines.findIndex((line, i) => i > start && /(?:梁|トラス)要素の(?:断面力|応力度)/.test(line));
+      // A table ends at the next long underline (the closing rule or the next
+      // title's underline). The next title itself may be written in CP949 and
+      // then cannot be matched by name, which let the stress table (7 columns)
+      // overwrite the forces.
+      const endMatch = lines.findIndex((line, i) => i > start + 1 && (/_{10,}/.test(line) || /(?:梁|トラス)要素の(?:断面力|応力度)/.test(line)));
       const end = endMatch < 0 ? lines.length : endMatch;
       let currentElement = null, currentCase = null;
       for (let i = start + 1; i < end; i++) {
