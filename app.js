@@ -902,7 +902,7 @@ const boundaryLegend = {
   spring: { name: "回転ばね", svg: (x, y) => `<path d="M${x} ${y - 4}l4 4l-4 4l-4 -4z"/>` },
 };
 
-function boundarySvg(model, plane, segments, pt2) {
+function boundarySvg(model, plane, segments, pt2, labelPx = 9) {
   const drawn = new Set(segments.flatMap(({ element }) => element.nodes));
   const symbols = [], used = new Set(), seen = new Set();
   const place = (kind, [x, y], title) => {
@@ -946,7 +946,7 @@ function boundarySvg(model, plane, segments, pt2) {
   const legend = Object.keys(boundaryLegend).filter((kind) => used.has(kind)).map((kind) => {
     const item = boundaryLegend[kind], text = `<text x="${x + 9}" y="582" class="boundary-label">${item.name}</text>`;
     const mark = `<g class="boundary-symbols">${item.svg(x, ["endPin", "endHalf", "spring"].includes(kind) ? 578.5 : 574)}</g>`;
-    x += 24 + item.name.length * 10;
+    x += 24 + item.name.length * (labelPx + 1);
     return mark + text;
   }).join("");
   return { symbols: `<g class="boundary-symbols">${symbols.join("")}</g>`, legend, count: symbols.length };
@@ -954,7 +954,7 @@ function boundarySvg(model, plane, segments, pt2) {
 
 const diagramKindName = (kind) => ({ member: "部材番号", section: "断面番号", boundary: "境界条件", boundary: "境界条件" })[kind];
 
-const boundaryStyle = (fontFamily) => `.boundary-symbols>*,.boundary-symbols g>*{fill:#fff;stroke:#171a18;stroke-width:.7}.boundary-symbols .boundary-fill{fill:#171a18;stroke:none}.boundary-label{font-family:${fontFamily};font-size:9px;fill:#171a18}`;
+const boundaryStyle = (fontFamily, labelPx = 9) => `.boundary-symbols>*,.boundary-symbols g>*{fill:#fff;stroke:#171a18;stroke-width:.7}.boundary-symbols .boundary-fill{fill:#171a18;stroke:none}.boundary-label{font-family:${fontFamily};font-size:${labelPx.toFixed(2)}px;fill:#171a18}`;
 
 function rangeOf(values, fallback = [0, 1]) {
   if (!values.length) return fallback;
@@ -1106,7 +1106,7 @@ function numberingDiagramSvg(plane, kind, options = {}) {
     const x = from[0] + dx * inset / length, y = from[1] + dy * inset / length;
     memberEndDots.push(`<circle data-member-boundary-node="${nodeId}" data-member-id="${group.memberId}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${memberEndRadius.toFixed(2)}" fill="#d9870d"><title>単一部材 ${group.memberId} の端点（部材内側）</title></circle>`);
   }
-  const boundary = kind === "boundary" ? boundarySvg(model, plane, segments, pt2) : { symbols: "", legend: "", count: 0 };
+  const boundary = kind === "boundary" ? boundarySvg(model, plane, segments, pt2, ptToSvg(8)) : { symbols: "", legend: "", count: 0 };
   const occupied = [], numberLabels = [];
   for (const group of groups) {
     const origin = pt2(group.point), a = pt2(group.segment.a), b = pt2(group.segment.b);
@@ -1124,7 +1124,7 @@ function numberingDiagramSvg(plane, kind, options = {}) {
   const dimensionViewName = dimensionItems[0]?.viewName || "";
   app.lastDiagnostics = { plane: plane.name, diagramType: kind, total: groups.length, resultCount: numberLabels.length, boundaryCount: boundary.count, elements: segments.length, dimensionViewName };
   return `<svg class="diagram-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" data-dimension-view="${escapeHtml(dimensionViewName)}" role="img" aria-label="${escapeHtml(plane.name)} ${diagramName}図">
-    <style>.dimension-line{stroke:${dimensionColor};stroke-width:${dimensionLineWidth};fill:none}.dimension-label,.number-label{font-family:${fontFamily};font-size:${fontSize.toFixed(2)}px;font-weight:${fontWeight};fill:${color}}.dimension-label{font-size:${ptToSvg(8).toFixed(2)}px;fill:${gridLabelColor}}.sheet-title{font-family:${fontFamily};font-size:${ptToSvg(8).toFixed(2)}px;fill:${color}}${boundaryStyle(fontFamily)}</style>
+    <style>.dimension-line{stroke:${dimensionColor};stroke-width:${dimensionLineWidth};fill:none}.dimension-label,.number-label{font-family:${fontFamily};font-size:${fontSize.toFixed(2)}px;font-weight:${fontWeight};fill:${color}}.dimension-label{font-size:${ptToSvg(8).toFixed(2)}px;fill:${gridLabelColor}}.sheet-title{font-family:${fontFamily};font-size:${ptToSvg(8).toFixed(2)}px;fill:${color}}${boundaryStyle(fontFamily, ptToSvg(8))}</style>
     <rect x="0" y="0" width="${width}" height="${height}" fill="#fff"/>
     <rect x="64" y="58" width="1072" height="473" fill="#fff" ${frame ? 'stroke="#3e4642" stroke-width=".8"' : ""}/>
     <g>${memberLines.join("")}</g><g>${dimensionLines.join("")}</g>
@@ -1175,7 +1175,8 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
   const rankLabel = (value) => Number(value).toFixed(rankDecimals);
   const ptToSvg = (pt) => Number(pt) * (options.fontBoost || 1) * width * 25.4 / (277 * 72);
   const labelFontSize = ptToSvg(options.labelFontSize || $("#labelFontSize")?.value || 8);
-  const legendFontSize = ptToSvg(options.legendFontSize || $("#legendFontSize")?.value || 8);
+  // The legend panel has fixed geometry, so it ignores the multi-up font boost.
+  const legendFontSize = ptToSvg(options.legendFontSize || $("#legendFontSize")?.value || 8) / (options.fontBoost || 1);
   const titleFontSize = ptToSvg(options.titleFontSize || 8);
   const fontFamilies = {
     arialNarrow: "'Arial Narrow', Arial, 'Noto Sans JP', sans-serif",
