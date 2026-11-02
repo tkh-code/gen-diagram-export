@@ -1402,6 +1402,43 @@ function selectedDiagramSvg(plane, loadCase, choice, options = {}) {
   return app.data.synthetic ? diagramSvg(plane, loadCase, choice.comp, options) : actualDiagramSvg(plane, loadCase, choice.comp, options);
 }
 
+// Diagrams in output order (mode x plane x case), shared by preview, print and PDF.
+function outputItems() {
+  const mode = diagramType();
+  const cases = mode === "stress" ? selected("case") : [null], planes = selected("plane");
+  const modes = ["member", "section"].includes(mode) && $("#bothNumberTypes")?.checked ? ["member", "section"] : [mode];
+  const items = [];
+  for (const outputMode of modes) for (const planeIdx of planes) for (const caseIdx of cases) {
+    items.push({ mode: outputMode, planeIdx, caseIdx, plane: app.data.planes[planeIdx], loadCase: caseIdx === null ? "" : app.data.cases[caseIdx] });
+  }
+  return items;
+}
+
+// Diagrams per sheet: 1 is a full page, 2 splits the long side, 3 and 4 use a 2 x 2 grid.
+function perPage() { return Math.min(4, Math.max(1, Number($("#perPage")?.value) || 1)); }
+function pageGrid(n, orientation) {
+  if (n === 1) return { cols: 1, rows: 1 };
+  if (n === 2) return orientation === "portrait" ? { cols: 1, rows: 2 } : { cols: 2, rows: 1 };
+  return { cols: 2, rows: 2 };
+}
+function pageSlices(items, n) {
+  const pages = [];
+  for (let i = 0; i < items.length; i += n) pages.push(items.slice(i, i + n));
+  return pages;
+}
+
+function previewSheet(choice) {
+  const n = perPage(), orientation = $("#orientation").value === "portrait" ? "portrait" : "landscape";
+  const items = outputItems(), { cols, rows } = pageGrid(n, orientation);
+  let index = items.findIndex((item) => item.mode === choice.mode && item.plane === app.data.planes[app.previewPlane] && (item.caseIdx === null || item.caseIdx === app.previewCase));
+  if (index < 0) index = 0;
+  const pages = pageSlices(items, n), pageIndex = Math.floor(index / n), cells = pages[pageIndex] || [];
+  const cellHtml = Array.from({ length: n }, (_, i) => cells[i]
+    ? `<div class="sheet-cell">${selectedDiagramSvg(cells[i].plane, cells[i].loadCase, { mode: cells[i].mode, comp: choice.comp })}</div>`
+    : `<div class="sheet-cell empty"></div>`).join("");
+  return `<div class="sheet-preview ${orientation}" style="grid-template-columns:repeat(${cols},1fr);grid-template-rows:repeat(${rows},1fr)">${cellHtml}</div><p class="hint centered-hint">1ページ ${n} 枚 · ${pageIndex + 1} / ${pages.length} ページ目（A4 ${orientation === "portrait" ? "縦" : "横"}）</p>`;
+}
+
 function updatePreview() {
   if (!app.data) return;
   const choice = currentChoice();
@@ -1422,6 +1459,7 @@ function updatePreview() {
     ? `<div class="empty-state"><strong>${numbering ? "登録平面" : "ケースと登録平面"}を選択してください</strong>チェックを入れるとプレビューを表示します。</div>`
     : !numbering && !hasResult
       ? `<div class="empty-state"><strong>応力図にはANLが必要です</strong>解析結果ファイルを追加してください。</div>`
+      : perPage() > 1 ? previewSheet(choice)
       : selectedDiagramSvg(plane, choice.loadCase, choice);
   const diagnostic = app.data.synthetic ? null : app.lastDiagnostics;
   $("#coverageStatus").textContent = diagnostic && hasPlane && (numbering || (hasCase && hasResult))
@@ -1548,18 +1586,21 @@ function svgToCanvas(svg, widthPx) {
   });
 }
 
-async function buildPdf(svgs, orientation) {
+async function buildPdf(svgs, orientation, n = 1) {
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF({ orientation, unit: "mm", format: "a4" });
   const pageW = orientation === "portrait" ? 210 : 297, pageH = orientation === "portrait" ? 297 : 210, margin = 5;
+  const { cols, rows } = pageGrid(n, orientation), gap = n > 1 ? 2 : 0;
+  const cellW = (pageW - margin * 2 - gap * (cols - 1)) / cols, cellH = (pageH - margin * 2 - gap * (rows - 1)) / rows;
   for (let i = 0; i < svgs.length; i++) {
     setStatus(`PDFを作成中… ${i + 1}/${svgs.length}`);
-    const canvas = await svgToCanvas(svgs[i], 3300);
-    const boxW = pageW - margin * 2, boxH = pageH - margin * 2;
-    const scale = Math.min(boxW / canvas.width, boxH / canvas.height);
+    const canvas = await svgToCanvas(svgs[i], n > 1 ? 2400 : 3300);
+    const scale = Math.min(cellW / canvas.width, cellH / canvas.height);
     const w = canvas.width * scale, h = canvas.height * scale;
-    if (i) pdf.addPage("a4", orientation);
-    pdf.addImage(canvas.toDataURL("image/png"), "PNG", (pageW - w) / 2, (pageH - h) / 2, w, h, undefined, "FAST");
+    const slot = i % n, col = slot % cols, row = Math.floor(slot / cols);
+    if (i && slot === 0) pdf.addPage("a4", orientation);
+    const x = margin + col * (cellW + gap) + (cellW - w) / 2, y = margin + row * (cellH + gap) + (cellH - h) / 2;
+    pdf.addImage(canvas.toDataURL("image/png"), "PNG", x, y, w, h, undefined, "FAST");
   }
   return pdf.output("blob");
 }
@@ -1570,18 +1611,15 @@ async function printBatch() {
   if (await downloadsReady) return savePdfBatch();
   const mode = diagramType();
   if (!app.data?.synthetic && (!app.model?.parsed || (mode === "stress" && !app.result?.parsed?.elements.size))) return;
-  const cases = mode === "stress" ? selected("case") : [null], planes = selected("plane");
-  const modes = ["member", "section"].includes(mode) && $("#bothNumberTypes")?.checked ? ["member", "section"] : [mode];
   const root = document.createElement("div");
   root.id = "printRoot";
   root.className = "hidden";
-  const pages = [];
-  for (const outputMode of modes) for (const planeIdx of planes) for (const caseIdx of cases) {
-    const plane = app.data.planes[planeIdx], loadCase = caseIdx === null ? "" : app.data.cases[caseIdx];
-    const svg = selectedDiagramSvg(plane, loadCase, { mode: outputMode, comp: component() }, { scale: Number($("#scale").value) });
-    const pageOrientation = $("#orientation").value === "portrait" ? "portrait" : "landscape";
-    pages.push(`<section class="print-page ${pageOrientation}"><div class="print-svg">${svg}</div></section>`);
-  }
+  const pageOrientation = $("#orientation").value === "portrait" ? "portrait" : "landscape";
+  const n = perPage(), { cols, rows } = pageGrid(n, pageOrientation);
+  const pages = pageSlices(outputItems(), n).map((slice) => {
+    const cells = slice.map((item) => `<div class="print-cell"><div class="print-svg">${selectedDiagramSvg(item.plane, item.loadCase, { mode: item.mode, comp: component() }, { scale: Number($("#scale").value) })}</div></div>`).join("");
+    return `<section class="print-page ${pageOrientation}${n > 1 ? " multi" : ""}" style="${n > 1 ? `grid-template-columns:repeat(${cols},1fr);grid-template-rows:repeat(${rows},1fr)` : ""}">${cells}</section>`;
+  });
   root.innerHTML = pages.join("");
   document.body.appendChild(root);
   document.body.classList.add("printing");
@@ -1598,18 +1636,14 @@ async function savePdfBatch() {
   if (!window.jspdf) { setStatus("PDF作成ライブラリを読み込めませんでした。ページを再読み込みしてください。", true); return; }
   const cases = mode === "stress" ? selected("case") : [null], planes = selected("plane");
   const modes = ["member", "section"].includes(mode) && $("#bothNumberTypes")?.checked ? ["member", "section"] : [mode];
-  const svgs = [];
-  for (const outputMode of modes) for (const planeIdx of planes) for (const caseIdx of cases) {
-    const plane = app.data.planes[planeIdx], loadCase = caseIdx === null ? "" : app.data.cases[caseIdx];
-    svgs.push(selectedDiagramSvg(plane, loadCase, { mode: outputMode, comp: component() }, { scale: Number($("#scale").value) }));
-  }
+  const svgs = outputItems().map((item) => selectedDiagramSvg(item.plane, item.loadCase, { mode: item.mode, comp: component() }, { scale: Number($("#scale").value) }));
   const button = $("#printButton");
   button.disabled = true;
   try {
-    const blob = await buildPdf(svgs, $("#orientation").value === "portrait" ? "portrait" : "landscape");
+    const blob = await buildPdf(svgs, $("#orientation").value === "portrait" ? "portrait" : "landscape", perPage());
     const base = safeFilename((app.model?.name || "GEN図面").replace(/\.(mgtx|mgt)$/i, ""));
     const kind = mode === "stress" ? `応力図_${component()}` : modes.length > 1 ? "部材番号_断面番号" : diagramKindName(mode);
-    setStatus(`PDF（${svgs.length} 枚）を作成しました。保存先を確認してください。`);
+    setStatus(`PDF（${svgs.length} 枚・${Math.ceil(svgs.length / perPage())} ページ）を作成しました。保存先を確認してください。`);
     await saveFile(`${base}_${kind}.pdf`, blob);
   } catch (error) {
     setStatus(`PDFを作成できませんでした: ${error.message || error}`, true);
@@ -1643,7 +1677,8 @@ for (const [inputId, nameId, kind] of [["modelInput", "modelName", "model"], ["r
 document.addEventListener("change", (event) => {
   if (event.target.matches('input[name="diagramType"]')) syncFontSizeForMode();
   if (event.target.matches('#labelFontSize')) app.fontSizes[app.fontSizeMode] = event.target.value;
-  if (event.target.matches('input[data-kind], input[name="diagramType"], input[name="component"], #bothNumberTypes, #titleLine, #scale, #frame, #valueMode, #showDimensions, #showMemberEnds, #memberEndSize, #memberEndInset, #hideOverlaps, #contourColors, #legendPosition, #decimalPlaces, #rankDecimals, #diagramFill, #labelOrientation, #labelOffsetMm, #fontFamily, #labelFontSize, #legendFontSize, #fontWeight, #valueColor, #dimensionLineWidth, #dimensionColor, #gridLabelColor, #labelLimitPercent')) refresh();
+  if (event.target.matches('input[data-kind], input[name="diagramType"], input[name="component"], #bothNumberTypes, #perPage, #titleLine, #scale, #frame, #valueMode, #showDimensions, #showMemberEnds, #memberEndSize, #memberEndInset, #hideOverlaps, #contourColors, #legendPosition, #decimalPlaces, #rankDecimals, #diagramFill, #labelOrientation, #labelOffsetMm, #fontFamily, #labelFontSize, #legendFontSize, #fontWeight, #valueColor, #dimensionLineWidth, #dimensionColor, #gridLabelColor, #labelLimitPercent')) refresh();
+  if (event.target.matches("#orientation")) refresh();
   if (event.target.matches("#orientation")) document.body.classList.toggle("print-portrait", event.target.value === "portrait");
 });
 $("#caseAll").addEventListener("click", () => useAll("case"));

@@ -30,3 +30,10 @@
 .title-fields input::placeholder{color:#a0aaa5}
 .title-preview{white-space:pre-line;line-height:1.55;padding:7px 8px;background:#f5f8f6;border-radius:4px;color:#53615c}
 @media(max-width:580px){.title-fields{grid-template-columns:1fr 1fr}}
+
+.sheet-preview{display:grid;gap:6px;width:100%;max-width:760px;margin:0 auto;padding:6px;background:#fff;border:1px solid #cfd8d4;box-shadow:0 1px 4px #0001}
+.sheet-preview.landscape{aspect-ratio:297/210}.sheet-preview.portrait{aspect-ratio:210/297;max-width:520px}
+.sheet-cell{min-width:0;min-height:0;border:1px dashed #d5ddd9;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.sheet-cell.empty{background:repeating-linear-gradient(45deg,#fafbfa,#fafbfa 6px,#f2f5f4 6px,#f2f5f4 12px)}
+.sheet-cell svg{width:100%;height:100%;display:block}
+@media print{.print-page.multi{display:grid;gap:2mm}.print-cell{height:100%;min-width:0;min-height:0;overflow:hidden}.print-cell .print-svg{height:100%}.print-cell .print-svg svg{max-height:none}}

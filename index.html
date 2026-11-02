@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f5f7f6" />
     <title>GEN 図面 一括出力</title>
-    <link rel="stylesheet" href="./styles.css?v=1.8.2" />
+    <link rel="stylesheet" href="./styles.css?v=1.9.0" />
   </head>
   <body>
     <header class="topbar">
@@ -103,6 +103,7 @@
               <summary>詳細設定</summary>
               <div class="advanced-fields">
                 <label>用紙方向<select id="orientation"><option value="landscape">横向き（A4）</option><option value="portrait">縦向き（A4）</option></select></label>
+                <label>1ページの図の枚数<select id="perPage"><option value="1" selected>1枚</option><option value="2">2枚</option><option value="3">3枚</option><option value="4">4枚</option></select></label>
                 <label>図の倍率（用紙内で自動調整）<select id="scale"><option value="1">標準</option><option value="1.25">大きめ</option><option value="0.8">小さめ</option></select></label>
                 <label>図枠<select id="frame"><option value="on">あり</option><option value="off">なし</option></select></label>
                 <label class="stress-only"><span>図の塗り方</span><select id="diagramFill"><option value="solid" selected>ソリッド塗り</option><option value="line">ライン塗り</option><option value="none">塗りなし</option></select></label>
@@ -155,6 +156,6 @@
       <footer class="app-footer"><span>GEN 図面 一括出力 · v1.2</span><span>非公式ツール · 出力図は GEN NX の原図と照合してください</span></footer>
     </main>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="./app.js?v=1.8.2"></script>
+    <script src="./app.js?v=1.9.0"></script>
   </body>
 </html>
