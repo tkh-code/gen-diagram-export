@@ -173,6 +173,18 @@ function parseModel(text) {
     for (const elementId of expandIds(first[0])) releases.set(elementId, { i: first[2], j: second[0] });
     row++;
   }
+  // A structure group named like a plane tells which members a sheet shows.
+  const groups = new Map();
+  let groupLine = "";
+  for (const line of rows("GROUP")) {
+    const clean = line.trim();
+    if (!clean || /^[;*$]/.test(clean)) continue;
+    groupLine += ` ${clean.replace(/\$/, "")}`;
+    if (clean.endsWith("\\")) continue;
+    const c = splitCsv(groupLine);
+    groups.set(c[0]?.trim(), new Set(expandIds(c[2])));
+    groupLine = "";
+  }
   const links = [];
   for (const line of rows("ELASTICLINK")) {
     const c = splitCsv(line).map((value) => value.trim());
@@ -206,7 +218,7 @@ function parseModel(text) {
     view.items.push({ type, text: c[2] || "", height: Number.isFinite(height) ? height : 0, start: coordinates.slice(0, 3), end: coordinates.slice(3, 6) });
   }
   const sectionCount = rows("SECTION").filter((line) => splitCsv(line).length > 1).length;
-  const model = { nodes, elements, members, memberByElement, constraints, releases, links, planes, dimensions, sectionCount, sectionNames: [...sections.keys()] };
+  const model = { nodes, elements, members, memberByElement, constraints, releases, groups, links, planes, dimensions, sectionCount, sectionNames: [...sections.keys()] };
   model.planes = planes.flatMap((plane) => [plane, ...quarterPlanes(model, plane)]);
   return model;
 }
@@ -591,12 +603,20 @@ function diagramSvg(plane, loadCase, comp, options = {}) {
   </svg>`;
 }
 
+// A plane with a same-named group shows that group only (no RC members lying
+// on the plane). Registered planes pass through rounded coordinates, so its
+// members may lie slightly outside the plane's tolerance.
+const GROUP_PLANE_MARGIN = 0.05;
+
 function elementsOnPlane(model, plane) {
   const distance = (p) => Math.abs(dot3(p.map((x, i) => x - plane.origin[i]), plane.normal));
+  const group = model.groups?.get(plane.titleName || plane.name);
   return model.elements.map((element) => {
     const a = model.nodes.get(element.nodes[0]), b = model.nodes.get(element.nodes[1]);
     if (!a || !b || !/BEAM|TRUSS|TENSTR|COMPTR/i.test(element.type)) return null;
-    if (distance(a) > plane.tolerance || distance(b) > plane.tolerance) return null;
+    if (group && !group.has(element.id)) return null;
+    const reach = group ? Math.max(plane.tolerance, GROUP_PLANE_MARGIN) : plane.tolerance;
+    if (distance(a) > reach || distance(b) > reach) return null;
     if (plane.part && !inPart(plane, a.map((x, i) => (x + b[i]) / 2))) return null;
     return { element, a, b };
   }).filter(Boolean);
@@ -883,7 +903,7 @@ const boundaryLegend = {
 };
 
 function boundarySvg(model, plane, segments, pt2) {
-  const onPlane = (p) => p && Math.abs(dot3(p.map((x, i) => x - plane.origin[i]), plane.normal)) <= plane.tolerance && (!plane.part || inPart(plane, p));
+  const drawn = new Set(segments.flatMap(({ element }) => element.nodes));
   const symbols = [], used = new Set(), seen = new Set();
   const place = (kind, [x, y], title) => {
     const key = `${kind}/${x.toFixed(1)}/${y.toFixed(1)}`;
@@ -894,7 +914,7 @@ function boundarySvg(model, plane, segments, pt2) {
   };
   for (const [nodeId, flag] of model.constraints) {
     const point = model.nodes.get(nodeId);
-    if (!onPlane(point)) continue;
+    if (!drawn.has(nodeId)) continue;
     const fixedMoves = flag.slice(0, 3).split("1").length - 1, fixedTurns = flag.slice(3, 6).split("1").length - 1;
     const kind = fixedMoves === 3 && fixedTurns === 3 ? "fixed" : fixedTurns ? "other" : fixedMoves === 3 ? "pin" : fixedMoves ? "roller" : "other";
     place(kind, pt2(point), `節点 ${nodeId} 拘束 ${flag}`);
@@ -919,7 +939,7 @@ function boundarySvg(model, plane, segments, pt2) {
     const detail = springs.length ? `回転ばね ${springs.map((i) => `${["Rx", "Ry", "Rz"][i - 3]}=${link.stiffness[i]}`).join(" ")}` : "ピン";
     for (const nodeId of link.nodes) {
       const point = model.nodes.get(nodeId);
-      if (onPlane(point)) place(kind, pt2(point), `弾性連結 節点 ${link.nodes.join("-")} ${detail}`);
+      if (drawn.has(nodeId)) place(kind, pt2(point), `弾性連結 節点 ${link.nodes.join("-")} ${detail}`);
     }
   }
   let x = 70;
