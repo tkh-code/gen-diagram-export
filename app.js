@@ -684,9 +684,40 @@ function memberEndpointNodes(model, group, byId = new Map(model.elements.map((el
 }
 
 function dimensionItemsForPlane(model, plane) {
-  if (!model.dimensions?.size) return [];
-  const aligned = plane.label === "X-Y" ? [] : alignedDimensionItems(model, plane);
-  return aligned.length ? aligned : gridDimensionItems(model, plane);
+  if (plane.label === "X-Y") return gridDimensionItems(model, plane);
+  const aligned = alignedDimensionItems(model, plane);
+  if (aligned.length) return aligned;
+  const frames = frameGridItems(model, plane);
+  return frames.length ? frames : gridDimensionItems(model, plane);
+}
+
+// Grids of a frame sheet as on a structural elevation: each registered plane
+// crossing the sheet gives a grid along the line where the two planes meet,
+// from its lowest shared node to a little past the highest, with the symbol
+// beyond the end.
+function frameGridItems(model, plane) {
+  const nodesOn = (target) => new Set(elementsOnPlane(model, target).flatMap(({ element }) => element.nodes));
+  const here = nodesOn(plane);
+  if (!here.size) return [];
+  const uv = [...here].map((id) => planePoint(plane, model.nodes.get(id)));
+  const span = Math.max(...[0, 1].map((i) => { const [low, high] = rangeOf(uv.map((p) => p[i])); return high - low; }));
+  const items = [];
+  for (const other of model.planes) {
+    if (other.part || other.name === plane.name || other.label === "X-Y" || Math.abs(dot3(other.normal, plane.normal)) > 0.7) continue;
+    const direction = unit3(cross3(plane.normal, other.normal));
+    if (!direction || Math.abs(direction[2]) < 0.2) continue;
+    const up = direction[2] < 0 ? direction.map((x) => -x) : direction;
+    const shared = [...nodesOn(other)].filter((id) => here.has(id)).map((id) => model.nodes.get(id));
+    if (!shared.length) continue;
+    const center = [0, 1, 2].map((i) => shared.reduce((sum, p) => sum + p[i], 0) / shared.length);
+    const along = shared.map((p) => dot3(p.map((x, i) => x - center[i]), up));
+    const at = (distance) => center.map((x, i) => x + up[i] * distance);
+    const top = Math.max(...along) + span * 0.035, label = top + span * 0.022;
+    const text = other.name.replace(/^.*_/, "").trim();
+    items.push({ type: 0, text: "", viewName: "", a: at(Math.min(...along)), b: at(top) });
+    items.push({ type: 1, text, viewName: "", a: at(label), b: at(label).map((x, i) => x + plane.u[i] * span * 1e-4) });
+  }
+  return items;
 }
 
 // Grid lines of a plan dimension view (e.g. 通り芯_屋根) brought onto any sheet:
@@ -1020,8 +1051,9 @@ function numberingDiagramSvg(plane, kind, options = {}) {
   const labelOffset = Number(options.labelOffsetMm ?? $("#labelOffsetMm")?.value ?? 0.6) * width / 277;
   const labelOrientation = options.labelOrientation || $("#labelOrientation")?.value || "auto";
   const hideOverlaps = options.hideOverlaps ?? $("#hideOverlaps")?.checked ?? false;
-  const rawDimensionColor = options.dimensionColor || $("#dimensionColor")?.value || "#c9cfcc";
-  const dimensionColor = /^#[0-9a-f]{6}$/i.test(rawDimensionColor) ? rawDimensionColor : "#c9cfcc";
+  const rawDimensionColor = options.dimensionColor || $("#dimensionColor")?.value || "#e8820c";
+  const dimensionColor = /^#[0-9a-f]{6}$/i.test(rawDimensionColor) ? rawDimensionColor : "#e8820c";
+  const gridLabelColor = /^#[0-9a-f]{6}$/i.test($("#gridLabelColor")?.value || "") ? $("#gridLabelColor").value : "#12a812";
   const dimensionLineWidth = Number(options.dimensionLineWidth || $("#dimensionLineWidth")?.value || 0.2);
   const dimensionLines = [], dimensionLabels = [];
   for (const item of dimensionItems) {
@@ -1072,10 +1104,10 @@ function numberingDiagramSvg(plane, kind, options = {}) {
   const dimensionViewName = dimensionItems[0]?.viewName || "";
   app.lastDiagnostics = { plane: plane.name, diagramType: kind, total: groups.length, resultCount: numberLabels.length, boundaryCount: boundary.count, elements: segments.length, dimensionViewName };
   return `<svg class="diagram-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" data-dimension-view="${escapeHtml(dimensionViewName)}" role="img" aria-label="${escapeHtml(plane.name)} ${diagramName}図">
-    <style>.dimension-line{stroke:${dimensionColor};stroke-width:${dimensionLineWidth};fill:none}.dimension-label,.number-label{font-family:${fontFamily};font-size:${fontSize.toFixed(2)}px;font-weight:${fontWeight};fill:${color}}.sheet-title{font-family:${fontFamily};font-size:${ptToSvg(8).toFixed(2)}px;fill:${color}}${boundaryStyle(fontFamily)}</style>
+    <style>.dimension-line{stroke:${dimensionColor};stroke-width:${dimensionLineWidth};fill:none}.dimension-label,.number-label{font-family:${fontFamily};font-size:${fontSize.toFixed(2)}px;font-weight:${fontWeight};fill:${color}}.dimension-label{font-size:${ptToSvg(8).toFixed(2)}px;fill:${gridLabelColor}}.sheet-title{font-family:${fontFamily};font-size:${ptToSvg(8).toFixed(2)}px;fill:${color}}${boundaryStyle(fontFamily)}</style>
     <rect x="0" y="0" width="${width}" height="${height}" fill="#fff"/>
     <rect x="64" y="58" width="1072" height="473" fill="#fff" ${frame ? 'stroke="#3e4642" stroke-width=".8"' : ""}/>
-    <g>${dimensionLines.join("")}</g><g>${memberLines.join("")}</g>
+    <g>${memberLines.join("")}</g><g>${dimensionLines.join("")}</g>
     <g class="member-end-dots">${memberEndDots.join("")}</g>${boundary.symbols}
     <g class="dimension-label">${dimensionLabels.join("")}</g><g class="number-label">${numberLabels.join("")}</g>
     <text x="70" y="556" class="sheet-title">${escapeHtml(lineName)}　${diagramName}</text>${boundary.legend}
@@ -1141,8 +1173,9 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
   const labelOffset = Number(options.labelOffsetMm ?? $("#labelOffsetMm")?.value ?? 0.6) * width / 277;
   const hideOverlaps = options.hideOverlaps ?? $("#hideOverlaps")?.checked ?? false;
   const dimensionLineWidth = Number(options.dimensionLineWidth || $("#dimensionLineWidth")?.value || 0.2);
-  const rawDimensionColor = options.dimensionColor || $("#dimensionColor")?.value || "#c9cfcc";
-  const dimensionColor = /^#[0-9a-f]{6}$/i.test(rawDimensionColor) ? rawDimensionColor : "#c9cfcc";
+  const rawDimensionColor = options.dimensionColor || $("#dimensionColor")?.value || "#e8820c";
+  const dimensionColor = /^#[0-9a-f]{6}$/i.test(rawDimensionColor) ? rawDimensionColor : "#e8820c";
+  const gridLabelColor = /^#[0-9a-f]{6}$/i.test($("#gridLabelColor")?.value || "") ? $("#gridLabelColor").value : "#12a812";
   const diagramFill = options.diagramFill || $("#diagramFill")?.value || "solid";
   const chartLeft = legendPosition === "left" ? 224 : 80;
   const chartRight = legendPosition === "left" ? 1124 : 986;
@@ -1307,6 +1340,7 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
     <style>
       .dimension-line{stroke:${dimensionColor};stroke-width:${dimensionLineWidth};fill:none}
       .dimension-text,.value-label{font-family:${fontFamily};font-size:${labelFontSize.toFixed(2)}px;font-weight:${fontWeight};fill:${valueColor}}
+      .dimension-text{fill:${gridLabelColor}}
       .drawing-title{font-family:${fontFamily};font-size:${titleFontSize.toFixed(2)}px;font-weight:${fontWeight};fill:${valueColor}}
       .legend-brand{font:${(legendFontSize * 1.2).toFixed(2)}px Arial,sans-serif;fill:#fff}
       .legend-post{font:${(legendFontSize * 0.8).toFixed(2)}px ${fontFamily};fill:#fff;letter-spacing:.5px}
@@ -1321,8 +1355,8 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
     </style>
     <!-- The PDF reference places the A4 landscape frame as a centered, shallow wide panel. -->
     <rect x="64" y="58" width="1072" height="473" fill="#fff" ${frame ? 'stroke="#3e4642" stroke-width=".8"' : ""}/>
-    <g>${dimensionLines.join("")}</g><g>${contourCells.join("")}</g>
-    <g>${memberLines.join("")}</g><g>${dimensionLabels.join("")}${labelSvg.join("")}</g>
+    <g>${contourCells.join("")}</g>
+    <g>${memberLines.join("")}</g><g>${dimensionLines.join("")}</g><g>${dimensionLabels.join("")}${labelSvg.join("")}</g>
     ${frame
       ? `<line x1="${legendDividerX.toFixed(2)}" y1="58" x2="${legendDividerX.toFixed(2)}" y2="531" class="legend-divider"/>`
       : `<rect x="${legendPanelLeft.toFixed(2)}" y="58" width="${(legendPanelRight - legendPanelLeft).toFixed(2)}" height="473" class="legend-frame"/>`}
@@ -1589,7 +1623,7 @@ for (const [inputId, nameId, kind] of [["modelInput", "modelName", "model"], ["r
 document.addEventListener("change", (event) => {
   if (event.target.matches('input[name="diagramType"]')) syncFontSizeForMode();
   if (event.target.matches('#labelFontSize')) app.fontSizes[app.fontSizeMode] = event.target.value;
-  if (event.target.matches('input[data-kind], input[name="diagramType"], input[name="component"], #bothNumberTypes, #titleLine, #scale, #frame, #valueMode, #showDimensions, #showMemberEnds, #memberEndSize, #memberEndInset, #hideOverlaps, #contourColors, #legendPosition, #decimalPlaces, #rankDecimals, #diagramFill, #labelOrientation, #labelOffsetMm, #fontFamily, #labelFontSize, #legendFontSize, #fontWeight, #valueColor, #dimensionLineWidth, #dimensionColor, #labelLimitPercent')) refresh();
+  if (event.target.matches('input[data-kind], input[name="diagramType"], input[name="component"], #bothNumberTypes, #titleLine, #scale, #frame, #valueMode, #showDimensions, #showMemberEnds, #memberEndSize, #memberEndInset, #hideOverlaps, #contourColors, #legendPosition, #decimalPlaces, #rankDecimals, #diagramFill, #labelOrientation, #labelOffsetMm, #fontFamily, #labelFontSize, #legendFontSize, #fontWeight, #valueColor, #dimensionLineWidth, #dimensionColor, #gridLabelColor, #labelLimitPercent')) refresh();
   if (event.target.matches("#orientation")) document.body.classList.toggle("print-portrait", event.target.value === "portrait");
 });
 $("#caseAll").addEventListener("click", () => useAll("case"));

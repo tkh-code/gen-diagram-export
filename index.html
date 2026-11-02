@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f5f7f6" />
     <title>GEN 図面 一括出力</title>
-    <link rel="stylesheet" href="./styles.css?v=1.7.0" />
+    <link rel="stylesheet" href="./styles.css?v=1.8.0" />
   </head>
   <body>
     <header class="topbar">
@@ -118,8 +118,9 @@
                 <label class="stress-only"><span>凡例文字サイズ</span><select id="legendFontSize"><option value="5">5 pt</option><option value="6">6 pt</option><option value="7">7 pt</option><option value="8" selected>8 pt</option><option value="9">9 pt</option><option value="10">10 pt</option><option value="12">12 pt</option></select></label>
                 <label>文字の太さ<select id="fontWeight"><option value="normal" selected>標準</option><option value="bold">太字</option></select></label>
                 <label>文字色<input id="valueColor" type="color" value="#171a18" /></label>
-                <label>通り芯の太さ<select id="dimensionLineWidth"><option value="0.15">極細</option><option value="0.2" selected>細</option><option value="0.3">標準</option><option value="0.5">太</option></select></label>
-                <label>通り芯の色<input id="dimensionColor" type="color" value="#c9cfcc" /></label>
+                <label>通り芯の太さ<select id="dimensionLineWidth"><option value="0.15">極細</option><option value="0.2">細</option><option value="0.3">標準</option><option value="0.5" selected>太</option></select></label>
+                <label>通り芯の色<input id="dimensionColor" type="color" value="#e8820c" /></label>
+                <label>通り符号の色<input id="gridLabelColor" type="color" value="#12a812" /></label>
                 <label class="stress-only"><span>数値表示の下限</span><select id="labelLimitPercent"><option value="0" selected>すべて</option><option value="5">最大の5%以上</option><option value="10">最大の10%以上</option><option value="25">最大の25%以上</option><option value="50">最大の50%以上</option></select></label>
               </div>
               <p class="hint stress-only">数値の実精度はANLファイルの桁数までです。元データが小数1桁の場合、2桁以上で表示しても精度は増えません。</p>
@@ -154,6 +155,6 @@
       <footer class="app-footer"><span>GEN 図面 一括出力 · v1.2</span><span>非公式ツール · 出力図は GEN NX の原図と照合してください</span></footer>
     </main>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="./app.js?v=1.7.0"></script>
+    <script src="./app.js?v=1.8.0"></script>
   </body>
 </html>
