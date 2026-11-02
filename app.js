@@ -173,6 +173,12 @@ function parseModel(text) {
     for (const elementId of expandIds(first[0])) releases.set(elementId, { i: first[2], j: second[0] });
     row++;
   }
+  const links = [];
+  for (const line of rows("ELASTICLINK")) {
+    const c = splitCsv(line).map((value) => value.trim());
+    if (c[3]?.toUpperCase() !== "GEN") continue;
+    links.push({ nodes: [Number(c[1]), Number(c[2])], rigid: c.slice(5, 11).map((flag) => flag.toUpperCase() === "YES"), stiffness: c.slice(11, 17).map(Number) });
+  }
   const planes = (sections.get("NAMEDPLANE") || []).flatMap((line) => {
     const clean = line.trim();
     if (!clean || clean.startsWith(";") || clean.startsWith("$") || clean.startsWith("*")) return [];
@@ -200,7 +206,7 @@ function parseModel(text) {
     view.items.push({ type, text: c[2] || "", height: Number.isFinite(height) ? height : 0, start: coordinates.slice(0, 3), end: coordinates.slice(3, 6) });
   }
   const sectionCount = rows("SECTION").filter((line) => splitCsv(line).length > 1).length;
-  const model = { nodes, elements, members, memberByElement, constraints, releases, planes, dimensions, sectionCount, sectionNames: [...sections.keys()] };
+  const model = { nodes, elements, members, memberByElement, constraints, releases, links, planes, dimensions, sectionCount, sectionNames: [...sections.keys()] };
   model.planes = planes.flatMap((plane) => [plane, ...quarterPlanes(model, plane)]);
   return model;
 }
@@ -686,8 +692,7 @@ function dimensionItemsForPlane(model, plane) {
 // Grid lines of a plan dimension view (e.g. 通り芯_屋根) brought onto any sheet:
 // a horizontal sheet clips them to its members, an elevation or inclined sheet
 // draws each grid where its vertical plane cuts the sheet. Grid names come
-// from the view's text items (nearest line end) and a dimension chain is added
-// along the bottom (and the left for grids running across the sheet).
+// from the view's text items (nearest line end).
 function gridDimensionItems(model, plane) {
   const segments = elementsOnPlane(model, plane);
   if (!segments.length) return [];
@@ -710,34 +715,46 @@ function gridDimensionItems(model, plane) {
     items.push({ type: 0, grid: true, text: "", viewName: best.view.name, a: to3(line.u0, line.v0), b: to3(line.u1, line.v1) });
     if (line.text) items.push({ type: 1, text: line.text, viewName: best.view.name, a: to3(line.lu, line.lv), b: to3(line.lu + margin * 0.01, line.lv) });
   }
-  // Dimension chains: grids running up the sheet are measured along the
-  // bottom, grids running across it along the left edge.
-  const chain = (lines, fixed, along) => {
-    const stations = lines.map((line) => {
-      const [p0, p1] = along === "u" ? [[line.u0, line.v0], [line.u1, line.v1]] : [[line.v0, line.u0], [line.v1, line.u1]];
-      const t = (fixed - p0[1]) / (p1[1] - p0[1]);
-      return p0[0] + (p1[0] - p0[0]) * t;
-    }).filter(Number.isFinite).sort((a, b) => a - b).filter((value, i, all) => !i || value - all[i - 1] > 1e-6 * margin);
-    for (let i = 1; i < stations.length; i++) {
-      const [a, b] = along === "u" ? [to3(stations[i - 1], fixed), to3(stations[i], fixed)] : [to3(fixed, stations[i - 1]), to3(fixed, stations[i])];
-      items.push({ type: 2, text: formatLength(stations[i] - stations[i - 1]), viewName: best.view.name, a, b });
-    }
-  };
-  chain(best.lines.filter((l) => Math.abs(l.u1 - l.u0) < Math.abs(l.v1 - l.v0)), minV - margin * 0.5, "u");
-  chain(best.lines.filter((l) => Math.abs(l.u1 - l.u0) >= Math.abs(l.v1 - l.v0)), minU - margin * 0.5, "v");
   return items;
 }
 
-function formatLength(value) {
-  return Math.abs(value) >= 100 ? Math.round(value).toLocaleString("en-US") : value.toFixed(3);
+// Length-like texts in a dimension view are dimensions, not grid symbols.
+const isLengthText = (text) => /^(0|\d{3,}|\d{1,3}(,\d{3})+|\d+\.\d+)$/.test(text.trim());
+
+// A grid drawn as a dashed line arrives as many short pieces. Join the pieces
+// lying on one straight line so the symbol belongs to the whole grid.
+function joinCollinear(pieces) {
+  const joined = [];
+  for (const piece of pieces) {
+    const d = [piece.b[0] - piece.a[0], piece.b[1] - piece.a[1]], length = Math.hypot(...d);
+    const unit = [d[0] / length, d[1] / length];
+    const line = joined.find((other) => {
+      if (Math.abs(other.unit[0] * unit[1] - other.unit[1] * unit[0]) >= 1e-3) return false;
+      if (Math.abs((piece.a[0] - other.a[0]) * other.unit[1] - (piece.a[1] - other.a[1]) * other.unit[0]) >= 0.01) return false;
+      // Pieces of a line sit close together; a far piece in line belongs to another grid.
+      const at = (p) => (p[0] - other.a[0]) * other.unit[0] + (p[1] - other.a[1]) * other.unit[1];
+      const [from, to] = [at(piece.a), at(piece.b)].sort((x, y) => x - y), span = at(other.b);
+      return Math.max(from - span, -to) <= 3 * Math.min(length, span);
+    });
+    if (!line) { joined.push({ ...piece, unit }); continue; }
+    const at = (p) => (p[0] - line.a[0]) * line.unit[0] + (p[1] - line.a[1]) * line.unit[1];
+    const all = [line.a, line.b, piece.a, piece.b].sort((p, q) => at(p) - at(q));
+    line.b = all[3];
+    line.a = all[0];
+  }
+  return joined;
 }
 
 function viewGrids(view) {
-  const lines = view.items.filter((item) => item.type === 0).map((item) => ({
+  const joined = joinCollinear(view.items.filter((item) => item.type === 0).map((item) => ({
     a: dimensionPoint(view, item.start), b: dimensionPoint(view, item.end), text: "", labelAtStart: false,
-  })).filter(({ a, b }) => Math.hypot(b[0] - a[0], b[1] - a[1]) > 1e-9);
+  })).filter(({ a, b }) => Math.hypot(b[0] - a[0], b[1] - a[1]) > 1e-9));
+  // Short pieces are the symbol's circle, not grids.
+  const lengthOf = ({ a, b }) => Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const longest = Math.max(0, ...joined.map(lengthOf));
+  const lines = joined.filter((line) => lengthOf(line) >= longest * 0.25);
   for (const item of view.items) {
-    if (item.type !== 1 || !item.text.trim() || !lines.length) continue;
+    if (item.type !== 1 || !item.text.trim() || isLengthText(item.text) || !lines.length) continue;
     const p = dimensionPoint(view, item.start);
     let nearest = null;
     for (const line of lines) for (const atStart of [true, false]) {
@@ -800,35 +817,91 @@ function alignedDimensionItems(model, plane) {
     const labelCount = candidate.items.filter((item) => item.type === 1 && item.text.trim()).length;
     return { candidate, alignment, labelCount };
   }).filter(({ alignment, candidate }) => alignment > 0.5 && candidate.items.length);
-  candidates.sort((a, b) => (b.candidate.name === preferredName) - (a.candidate.name === preferredName) || b.labelCount - a.labelCount);
-  const view = candidates[0]?.candidate;
+  // With one view per frame, only the view lying on this sheet belongs to it.
+  const onSheet = candidates.filter(({ candidate }) => candidate.items.every((item) => [item.start, item.end].every((point) => {
+    const p = dimensionPoint(candidate, point);
+    return Math.abs(dot3(p.map((x, i) => x - plane.origin[i]), plane.normal)) <= Math.max(plane.tolerance, 0.05);
+  })));
+  const named = candidates.filter(({ candidate }) => candidate.name === preferredName);
+  const usable = onSheet.length ? onSheet : named.length ? named : candidates.length === 1 ? candidates : [];
+  usable.sort((a, b) => b.labelCount - a.labelCount);
+  const view = usable[0]?.candidate;
   if (!view) return [];
   // The dimension view is registered for the whole elevation. Filtering it by
   // the extents of the current members discarded distant grid names such as
   // い・ろ・は even though those labels existed in *DIMENSION-LINETEXT.
-  return view.items.map((item) => ({
+  return view.items.filter((item) => item.type !== 1 || !isLengthText(item.text)).map((item) => ({
     ...item, viewName: view.name,
     a: dimensionPoint(view, item.start), b: dimensionPoint(view, item.end),
   }));
 }
 
-// A dimension chain segment on the sheet: the line, two ticks and the length
-// written above it.
-function dimensionChainSvg(A, B, text) {
-  const dx = B[0] - A[0], dy = B[1] - A[1], length = Math.hypot(dx, dy) || 1;
-  const nx = -dy / length * 3, ny = dx / length * 3;
-  let angle = Math.atan2(dy, dx) * 180 / Math.PI;
-  if (angle > 90 || angle < -90) angle += 180;
-  const above = memberAboveNormal(dx, dy);
-  const x = (A[0] + B[0]) / 2 + above[0] * 3, y = (A[1] + B[1]) / 2 + above[1] * 3;
-  const tick = (P) => `<line x1="${(P[0] - nx).toFixed(1)}" y1="${(P[1] - ny).toFixed(1)}" x2="${(P[0] + nx).toFixed(1)}" y2="${(P[1] + ny).toFixed(1)}" class="dimension-line"/>`;
-  return {
-    line: `<line x1="${A[0].toFixed(1)}" y1="${A[1].toFixed(1)}" x2="${B[0].toFixed(1)}" y2="${B[1].toFixed(1)}" class="dimension-line"/>${tick(A)}${tick(B)}`,
-    x, y, angle,
+const gridDash = ' stroke-dasharray="9 2 1.5 2"';
+
+// Boundary symbols on a sheet: supports (*CONSTRAINT), member end pins
+// (*FRAME-RLS) and pin or rotational spring links (*ELASTICLINK). A legend for
+// the symbols used on the sheet goes below the drawing title.
+const boundaryLegend = {
+  fixed: { name: "固定支点", svg: (x, y) => `<line x1="${x - 7}" y1="${y}" x2="${x + 7}" y2="${y}"/>${[-6, -2, 2, 6].map((d) => `<line x1="${x + d}" y1="${y}" x2="${x + d - 3}" y2="${y + 4}"/>`).join("")}` },
+  pin: { name: "ピン支点", svg: (x, y) => `<path d="M${x} ${y}l-5 8.5h10z"/>` },
+  roller: { name: "ローラー支点", svg: (x, y) => `<path d="M${x} ${y}l-5 7h10z"/><line x1="${x - 6}" y1="${y + 9.5}" x2="${x + 6}" y2="${y + 9.5}"/>` },
+  other: { name: "その他の拘束", svg: (x, y) => `<rect x="${x - 3.5}" y="${y}" width="7" height="7"/>` },
+  endPin: { name: "ピン接合", svg: (x, y) => `<circle cx="${x}" cy="${y}" r="2.4"/>` },
+  endHalf: { name: "1軸まわりのピン", svg: (x, y) => `<circle cx="${x}" cy="${y}" r="2.4"/><path class="boundary-fill" d="M${x} ${y - 2.4}a2.4 2.4 0 0 1 0 4.8z"/>` },
+  spring: { name: "回転ばね", svg: (x, y) => `<path d="M${x} ${y - 4}l4 4l-4 4l-4 -4z"/>` },
+};
+
+function boundarySvg(model, plane, segments, pt2) {
+  const onPlane = (p) => p && Math.abs(dot3(p.map((x, i) => x - plane.origin[i]), plane.normal)) <= plane.tolerance && (!plane.part || inPart(plane, p));
+  const symbols = [], used = new Set(), seen = new Set();
+  const place = (kind, [x, y], title) => {
+    const key = `${kind}/${x.toFixed(1)}/${y.toFixed(1)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    used.add(kind);
+    symbols.push(`<g data-boundary="${kind}"><title>${escapeHtml(title)}</title>${boundaryLegend[kind].svg(Number(x.toFixed(1)), Number(y.toFixed(1)))}</g>`);
   };
+  for (const [nodeId, flag] of model.constraints) {
+    const point = model.nodes.get(nodeId);
+    if (!onPlane(point)) continue;
+    const fixedMoves = flag.slice(0, 3).split("1").length - 1, fixedTurns = flag.slice(3, 6).split("1").length - 1;
+    const kind = fixedMoves === 3 && fixedTurns === 3 ? "fixed" : fixedTurns ? "other" : fixedMoves === 3 ? "pin" : fixedMoves ? "roller" : "other";
+    place(kind, pt2(point), `節点 ${nodeId} 拘束 ${flag}`);
+  }
+  for (const { element, a, b } of segments) {
+    const release = model.releases.get(element.id);
+    if (!release) continue;
+    const A = pt2(a), B = pt2(b), length = Math.hypot(B[0] - A[0], B[1] - A[1]);
+    if (!length) continue;
+    for (const [flag, from, to, nodeId] of [[release.i, A, B, element.nodes[0]], [release.j, B, A, element.nodes[1]]]) {
+      const turns = flag.slice(4, 6).split("1").length - 1;
+      if (!turns) continue;
+      const inset = Math.min(5, length * 0.35);
+      place(turns === 2 ? "endPin" : "endHalf", [from[0] + (to[0] - from[0]) * inset / length, from[1] + (to[1] - from[1]) * inset / length], `要素 ${element.id} 節点 ${nodeId} 端部解放 ${flag}`);
+    }
+  }
+  for (const link of model.links) {
+    const turns = [3, 4, 5].filter((i) => !link.rigid[i]);
+    const springs = turns.filter((i) => link.stiffness[i] > 0);
+    if (!turns.length) continue;
+    const kind = springs.length ? "spring" : "endPin";
+    const detail = springs.length ? `回転ばね ${springs.map((i) => `${["Rx", "Ry", "Rz"][i - 3]}=${link.stiffness[i]}`).join(" ")}` : "ピン";
+    for (const nodeId of link.nodes) {
+      const point = model.nodes.get(nodeId);
+      if (onPlane(point)) place(kind, pt2(point), `弾性連結 節点 ${link.nodes.join("-")} ${detail}`);
+    }
+  }
+  let x = 70;
+  const legend = Object.keys(boundaryLegend).filter((kind) => used.has(kind)).map((kind) => {
+    const item = boundaryLegend[kind], text = `<text x="${x + 9}" y="582" class="boundary-label">${item.name}</text>`;
+    const mark = `<g class="boundary-symbols">${item.svg(x, ["endPin", "endHalf", "spring"].includes(kind) ? 578.5 : 574)}</g>`;
+    x += 24 + item.name.length * 10;
+    return mark + text;
+  }).join("");
+  return { symbols: `<g class="boundary-symbols">${symbols.join("")}</g>`, legend };
 }
 
-const gridDash = ' stroke-dasharray="9 2 1.5 2"';
+const boundaryStyle = (fontFamily) => `.boundary-symbols>*,.boundary-symbols g>*{fill:#fff;stroke:#171a18;stroke-width:.7}.boundary-symbols .boundary-fill{fill:#171a18;stroke:none}.boundary-label{font-family:${fontFamily};font-size:9px;fill:#171a18}`;
 
 function rangeOf(values, fallback = [0, 1]) {
   if (!values.length) return fallback;
@@ -952,11 +1025,7 @@ function numberingDiagramSvg(plane, kind, options = {}) {
   for (const item of dimensionItems) {
     const a = pt2(item.a), b = pt2(item.b);
     if (item.type === 0) dimensionLines.push(`<line x1="${a[0].toFixed(1)}" y1="${a[1].toFixed(1)}" x2="${b[0].toFixed(1)}" y2="${b[1].toFixed(1)}" class="dimension-line"${item.grid ? gridDash : ""}/>`);
-    else if (item.type === 2) {
-      const chain = dimensionChainSvg(a, b, item.text);
-      dimensionLines.push(chain.line);
-      dimensionLabels.push(`<text x="${chain.x.toFixed(1)}" y="${chain.y.toFixed(1)}" text-anchor="middle" transform="rotate(${chain.angle.toFixed(1)} ${chain.x.toFixed(1)} ${chain.y.toFixed(1)})">${escapeHtml(item.text)}</text>`);
-    } else if (item.text.trim()) {
+    else if (item.text.trim()) {
       let angle = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
       if (angle > 90 || angle < -90) angle += 180;
       const x = (a[0] + b[0]) / 2, y = (a[1] + b[1]) / 2;
@@ -983,6 +1052,7 @@ function numberingDiagramSvg(plane, kind, options = {}) {
     const x = from[0] + dx * inset / length, y = from[1] + dy * inset / length;
     memberEndDots.push(`<circle data-member-boundary-node="${nodeId}" data-member-id="${group.memberId}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${memberEndRadius.toFixed(2)}" fill="#d9870d"><title>単一部材 ${group.memberId} の端点（部材内側）</title></circle>`);
   }
+  const boundary = (options.showBoundary ?? $("#showBoundary")?.checked ?? true) ? boundarySvg(model, plane, segments, pt2) : { symbols: "", legend: "" };
   const occupied = [], numberLabels = [];
   for (const group of groups) {
     const origin = pt2(group.point), a = pt2(group.segment.a), b = pt2(group.segment.b);
@@ -1000,13 +1070,13 @@ function numberingDiagramSvg(plane, kind, options = {}) {
   const dimensionViewName = dimensionItems[0]?.viewName || "";
   app.lastDiagnostics = { plane: plane.name, diagramType: kind, total: groups.length, resultCount: numberLabels.length, elements: segments.length, dimensionViewName };
   return `<svg class="diagram-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" data-dimension-view="${escapeHtml(dimensionViewName)}" role="img" aria-label="${escapeHtml(plane.name)} ${diagramName}図">
-    <style>.dimension-line{stroke:${dimensionColor};stroke-width:${dimensionLineWidth};fill:none}.dimension-label,.number-label{font-family:${fontFamily};font-size:${fontSize.toFixed(2)}px;font-weight:${fontWeight};fill:${color}}.sheet-title{font-family:${fontFamily};font-size:${ptToSvg(8).toFixed(2)}px;fill:${color}}</style>
+    <style>.dimension-line{stroke:${dimensionColor};stroke-width:${dimensionLineWidth};fill:none}.dimension-label,.number-label{font-family:${fontFamily};font-size:${fontSize.toFixed(2)}px;font-weight:${fontWeight};fill:${color}}.sheet-title{font-family:${fontFamily};font-size:${ptToSvg(8).toFixed(2)}px;fill:${color}}${boundaryStyle(fontFamily)}</style>
     <rect x="0" y="0" width="${width}" height="${height}" fill="#fff"/>
     <rect x="64" y="58" width="1072" height="473" fill="#fff" ${frame ? 'stroke="#3e4642" stroke-width=".8"' : ""}/>
     <g>${dimensionLines.join("")}</g><g>${memberLines.join("")}</g>
-    <g class="member-end-dots">${memberEndDots.join("")}</g>
+    <g class="member-end-dots">${memberEndDots.join("")}</g>${boundary.symbols}
     <g class="dimension-label">${dimensionLabels.join("")}</g><g class="number-label">${numberLabels.join("")}</g>
-    <text x="70" y="556" class="sheet-title">${escapeHtml(lineName)}　${diagramName}</text>
+    <text x="70" y="556" class="sheet-title">${escapeHtml(lineName)}　${diagramName}</text>${boundary.legend}
   </svg>`;
 }
 
@@ -1122,12 +1192,6 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
   for (const item of dimensionItems) {
     const A = pt2(item.a), B = pt2(item.b);
     if (item.type === 0) { dimensionLines.push(`<line x1="${A[0].toFixed(1)}" y1="${A[1].toFixed(1)}" x2="${B[0].toFixed(1)}" y2="${B[1].toFixed(1)}" class="dimension-line"${item.grid ? gridDash : ""}/>`); continue; }
-    if (item.type === 2) {
-      const chain = dimensionChainSvg(A, B, item.text);
-      dimensionLines.push(chain.line);
-      registerText(dimensionLabels, item.text, chain.x, chain.y, chain.angle, "dimension-text", true);
-      continue;
-    }
     if (!item.text.trim()) continue;
     let angle = Math.atan2(B[1] - A[1], B[0] - A[0]) * 180 / Math.PI;
     if (angle > 90 || angle < -90) angle += 180;
@@ -1197,6 +1261,7 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
     missingIds: diagramMembers.filter(({ values }) => !values.length).map(({ element }) => element.id),
     outOfPlaneCount,
   };
+  const boundary = (options.showBoundary ?? $("#showBoundary")?.checked ?? true) ? boundarySvg(model, plane, planeMembers, pt2) : { symbols: "", legend: "" };
   const noMembers = planeMembers.length === 0;
   const unitParts = (result.units || "").split(/[ ,、]+/).filter(Boolean);
   const forceUnit = unitParts[0] || "ANL単位";
@@ -1252,17 +1317,18 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
       .legend-meta{font:${(legendFontSize * 0.86).toFixed(2)}px ${fontFamily};fill:#171a18}
       .file-label{font:${(legendFontSize * 0.78).toFixed(2)}px ${fontFamily};fill:#171a18}
       .triad-label{font:${(legendFontSize * 0.82).toFixed(2)}px ${fontFamily}}
+      ${boundaryStyle(fontFamily)}
     </style>
     <!-- The PDF reference places the A4 landscape frame as a centered, shallow wide panel. -->
     <rect x="64" y="58" width="1072" height="473" fill="#fff" ${frame ? 'stroke="#3e4642" stroke-width=".8"' : ""}/>
     <g>${dimensionLines.join("")}</g><g>${contourCells.join("")}</g>
-    <g>${memberLines.join("")}</g><g>${dimensionLabels.join("")}${labelSvg.join("")}</g>
+    <g>${memberLines.join("")}</g>${boundary.symbols}<g>${dimensionLabels.join("")}${labelSvg.join("")}</g>
     ${frame
       ? `<line x1="${legendDividerX.toFixed(2)}" y1="58" x2="${legendDividerX.toFixed(2)}" y2="531" class="legend-divider"/>`
       : `<rect x="${legendPanelLeft.toFixed(2)}" y="58" width="${(legendPanelRight - legendPanelLeft).toFixed(2)}" height="473" class="legend-frame"/>`}
     <g transform="translate(${legendPanelTranslateX.toFixed(2)} 0) scale(${legendPanelScaleX.toFixed(5)} 1)">${legend}</g>
     <text x="64" y="547" class="drawing-title">${escapeHtml(sheetTitle.line)}</text>
-    <text x="64" y="565" class="drawing-title">${escapeHtml(sheetTitle.detail)}</text>
+    <text x="64" y="565" class="drawing-title">${escapeHtml(sheetTitle.detail)}</text>${boundary.legend}
   </svg>`;
 }
 
@@ -1520,7 +1586,7 @@ for (const [inputId, nameId, kind] of [["modelInput", "modelName", "model"], ["r
 document.addEventListener("change", (event) => {
   if (event.target.matches('input[name="diagramType"]')) syncFontSizeForMode();
   if (event.target.matches('#labelFontSize')) app.fontSizes[app.fontSizeMode] = event.target.value;
-  if (event.target.matches('input[data-kind], input[name="diagramType"], input[name="component"], #bothNumberTypes, #titleLine, #scale, #frame, #valueMode, #showDimensions, #showMemberEnds, #memberEndSize, #memberEndInset, #hideOverlaps, #contourColors, #legendPosition, #decimalPlaces, #rankDecimals, #diagramFill, #labelOrientation, #labelOffsetMm, #fontFamily, #labelFontSize, #legendFontSize, #fontWeight, #valueColor, #dimensionLineWidth, #dimensionColor, #labelLimitPercent')) refresh();
+  if (event.target.matches('input[data-kind], input[name="diagramType"], input[name="component"], #bothNumberTypes, #titleLine, #scale, #frame, #valueMode, #showDimensions, #showBoundary, #showMemberEnds, #memberEndSize, #memberEndInset, #hideOverlaps, #contourColors, #legendPosition, #decimalPlaces, #rankDecimals, #diagramFill, #labelOrientation, #labelOffsetMm, #fontFamily, #labelFontSize, #legendFontSize, #fontWeight, #valueColor, #dimensionLineWidth, #dimensionColor, #labelLimitPercent')) refresh();
   if (event.target.matches("#orientation")) document.body.classList.toggle("print-portrait", event.target.value === "portrait");
 });
 $("#caseAll").addEventListener("click", () => useAll("case"));

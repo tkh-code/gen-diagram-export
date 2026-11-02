@@ -117,12 +117,13 @@
                 <label class="stress-only"><span>凡例文字サイズ</span><select id="legendFontSize"><option value="5">5 pt</option><option value="6">6 pt</option><option value="7">7 pt</option><option value="8" selected>8 pt</option><option value="9">9 pt</option><option value="10">10 pt</option><option value="12">12 pt</option></select></label>
                 <label>文字の太さ<select id="fontWeight"><option value="normal" selected>標準</option><option value="bold">太字</option></select></label>
                 <label>文字色<input id="valueColor" type="color" value="#171a18" /></label>
-                <label>寸法線の太さ<select id="dimensionLineWidth"><option value="0.15">極細</option><option value="0.2" selected>細</option><option value="0.3">標準</option><option value="0.5">太</option></select></label>
-                <label>寸法線の色<input id="dimensionColor" type="color" value="#c9cfcc" /></label>
+                <label>通り芯の太さ<select id="dimensionLineWidth"><option value="0.15">極細</option><option value="0.2" selected>細</option><option value="0.3">標準</option><option value="0.5">太</option></select></label>
+                <label>通り芯の色<input id="dimensionColor" type="color" value="#c9cfcc" /></label>
                 <label class="stress-only"><span>数値表示の下限</span><select id="labelLimitPercent"><option value="0" selected>すべて</option><option value="5">最大の5%以上</option><option value="10">最大の10%以上</option><option value="25">最大の25%以上</option><option value="50">最大の50%以上</option></select></label>
               </div>
               <p class="hint stress-only">数値の実精度はANLファイルの桁数までです。元データが小数1桁の場合、2桁以上で表示しても精度は増えません。</p>
-              <label class="check-setting"><input id="showDimensions" type="checkbox" checked /> 寸法線・寸法文字を重ねる</label>
+              <label class="check-setting"><input id="showDimensions" type="checkbox" checked /> 通り芯・通り符号を重ねる</label>
+              <label class="check-setting"><input id="showBoundary" type="checkbox" checked /> 境界条件（支点・ピン接合・回転ばね）を表示</label>
               <label class="check-setting member-only"><input id="showMemberEnds" type="checkbox" checked /> 単一部材の両端にオレンジ●を表示</label>
               <label class="member-only">端点●の直径<select id="memberEndSize"><option value="0.5">0.5 mm</option><option value="0.8" selected>0.8 mm</option><option value="1.2">1.2 mm</option><option value="1.6">1.6 mm</option><option value="2">2 mm</option></select></label>
               <label class="member-only">部材端から内側への距離<select id="memberEndInset"><option value="0.5">0.5 mm</option><option value="1" selected>1 mm</option><option value="1.5">1.5 mm</option><option value="2">2 mm</option><option value="3">3 mm</option></select></label>
