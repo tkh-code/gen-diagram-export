@@ -692,9 +692,9 @@ function dimensionItemsForPlane(model, plane) {
 }
 
 // Grids of a frame sheet as on a structural elevation: each registered plane
-// crossing the sheet gives a grid along the line where the two planes meet,
-// from its lowest shared node to a little past the highest, with the symbol
-// beyond the end.
+// crossing the sheet gives a grid on the line where the two planes meet. The
+// line starts clear of the members above the highest shared node, with the
+// symbol beyond its end.
 function frameGridItems(model, plane) {
   const nodesOn = (target) => new Set(elementsOnPlane(model, target).flatMap(({ element }) => element.nodes));
   const here = nodesOn(plane);
@@ -712,9 +712,9 @@ function frameGridItems(model, plane) {
     const center = [0, 1, 2].map((i) => shared.reduce((sum, p) => sum + p[i], 0) / shared.length);
     const along = shared.map((p) => dot3(p.map((x, i) => x - center[i]), up));
     const at = (distance) => center.map((x, i) => x + up[i] * distance);
-    const top = Math.max(...along) + span * 0.035, label = top + span * 0.022;
+    const start = Math.max(...along) + span * 0.012, top = start + span * 0.035, label = top + span * 0.022;
     const text = other.name.replace(/^.*_/, "").trim();
-    items.push({ type: 0, text: "", viewName: "", a: at(Math.min(...along)), b: at(top) });
+    items.push({ type: 0, text: "", viewName: "", a: at(start), b: at(top) });
     items.push({ type: 1, text, viewName: "", a: at(label), b: at(label).map((x, i) => x + plane.u[i] * span * 1e-4) });
   }
   return items;
