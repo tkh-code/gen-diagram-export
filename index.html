@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f5f7f6" />
     <title>GEN 図面 一括出力</title>
-    <link rel="stylesheet" href="./styles.css?v=1.9.2" />
+    <link rel="stylesheet" href="./styles.css?v=1.9.3" />
   </head>
   <body>
     <header class="topbar">
@@ -111,7 +111,7 @@
                 <label class="stress-only"><span>凡例位置</span><select id="legendPosition"><option value="right" selected>右側</option><option value="left">左側</option></select></label>
                 <label class="stress-only"><span>コンター階調</span><select id="contourColors"><option value="6">6色</option><option value="12" selected>12色</option><option value="18">18色</option><option value="24">24色</option></select></label>
                 <label class="stress-only"><span>値の小数桁</span><select id="decimalPlaces"><option value="0">0桁</option><option value="1" selected>1桁</option><option value="2">2桁</option><option value="3">3桁</option><option value="4">4桁</option></select></label>
-                <label class="stress-only"><span>凡例の小数桁</span><select id="rankDecimals"><option value="0">0桁</option><option value="1">1桁</option><option value="2" selected>2桁</option><option value="3">3桁</option><option value="4">4桁</option></select></label>
+                <label class="stress-only"><span>凡例の小数桁</span><select id="rankDecimals"><option value="0">0桁</option><option value="1" selected>1桁</option><option value="2">2桁</option><option value="3">3桁</option><option value="4">4桁</option></select></label>
                 <label>数値の向き<select id="labelOrientation"><option value="auto" selected>部材に対して自動</option><option value="0">水平 0°</option><option value="45">45°</option><option value="90">90°</option><option value="-45">-45°</option></select></label>
                 <label>数値の離れ<select id="labelOffsetMm"><option value="0">0 mm</option><option value="0.6" selected>0.6 mm</option><option value="1.2">1.2 mm</option><option value="2">2 mm</option><option value="3">3 mm</option></select></label>
                 <label>文字フォント<select id="fontFamily"><option value="arialNarrow" selected>Arial Narrow（GEN風）</option><option value="arial">Arial</option><option value="msGothic">MS ゴシック</option><option value="msMincho">明朝体（游明朝 / MS 明朝）</option><option value="meiyo">Meiryo UI</option><option value="noto">Noto Sans JP</option></select></label>
@@ -156,6 +156,6 @@
       <footer class="app-footer"><span>GEN 図面 一括出力 · v1.2</span><span>非公式ツール · 出力図は GEN NX の原図と照合してください</span></footer>
     </main>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="./app.js?v=1.9.2"></script>
+    <script src="./app.js?v=1.9.3"></script>
   </body>
 </html>
