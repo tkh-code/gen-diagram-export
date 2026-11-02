@@ -37,3 +37,4 @@
 .sheet-cell.empty{background:repeating-linear-gradient(45deg,#fafbfa,#fafbfa 6px,#f2f5f4 6px,#f2f5f4 12px)}
 .sheet-cell svg{width:100%;height:100%;display:block}
 @media print{.print-page.multi{display:grid;gap:2mm}.print-cell{height:100%;min-width:0;min-height:0;overflow:hidden}.print-cell .print-svg{height:100%}.print-cell .print-svg svg{max-height:none}}
+@media print{body.printing>*:not(#printRoot){display:none!important}}

@@ -1057,7 +1057,7 @@ function numberingDiagramSvg(plane, kind, options = {}) {
     { left: chartLeft, right: chartRight, top: chartTop, bottom: chartBottom }, options.scale || $("#scale")?.value || 1);
   const { minU, maxZ, fit, x0, y0 } = bounds;
   const pt2 = (point) => { const [u, v] = planePoint(plane, point); return [x0 + (u - minU) * fit, y0 + (maxZ - v) * fit]; };
-  const ptToSvg = (pt) => Number(pt) * width * 25.4 / (277 * 72);
+  const ptToSvg = (pt) => Number(pt) * (options.fontBoost || 1) * width * 25.4 / (277 * 72);
   const fontSize = ptToSvg(options.labelFontSize || $("#labelFontSize")?.value || 8);
   const fontFamilies = {
     arialNarrow: "'Arial Narrow',Arial,'Noto Sans JP',sans-serif", arial: "Arial,'Noto Sans JP',sans-serif",
@@ -1173,7 +1173,7 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
   const ranks = contourRankValues(minimum, maximum, count);
   const numberLabel = (value) => Number(value).toFixed(decimalPlaces);
   const rankLabel = (value) => Number(value).toFixed(rankDecimals);
-  const ptToSvg = (pt) => Number(pt) * width * 25.4 / (277 * 72);
+  const ptToSvg = (pt) => Number(pt) * (options.fontBoost || 1) * width * 25.4 / (277 * 72);
   const labelFontSize = ptToSvg(options.labelFontSize || $("#labelFontSize")?.value || 8);
   const legendFontSize = ptToSvg(options.legendFontSize || $("#legendFontSize")?.value || 8);
   const titleFontSize = ptToSvg(options.titleFontSize || 8);
@@ -1421,6 +1421,14 @@ function pageGrid(n, orientation) {
   if (n === 2) return orientation === "portrait" ? { cols: 1, rows: 2 } : { cols: 2, rows: 1 };
   return { cols: 2, rows: 2 };
 }
+// A diagram shrinks with its cell, so its text is enlarged to stay legible
+// (full strength would crowd the drawing, hence the exponent).
+function fontBoost(n, orientation) {
+  if (n === 1) return 1;
+  const { cols } = pageGrid(n, orientation);
+  const cellW = ((orientation === "portrait" ? 210 : 297) - 10 - 2 * (cols - 1)) / cols;
+  return Math.max(1, Math.pow(277 / (cellW), 0.85));
+}
 function pageSlices(items, n) {
   const pages = [];
   for (let i = 0; i < items.length; i += n) pages.push(items.slice(i, i + n));
@@ -1434,7 +1442,7 @@ function previewSheet(choice) {
   if (index < 0) index = 0;
   const pages = pageSlices(items, n), pageIndex = Math.floor(index / n), cells = pages[pageIndex] || [];
   const cellHtml = Array.from({ length: n }, (_, i) => cells[i]
-    ? `<div class="sheet-cell">${selectedDiagramSvg(cells[i].plane, cells[i].loadCase, { mode: cells[i].mode, comp: choice.comp })}</div>`
+    ? `<div class="sheet-cell">${selectedDiagramSvg(cells[i].plane, cells[i].loadCase, { mode: cells[i].mode, comp: choice.comp }, { fontBoost: fontBoost(n, orientation) })}</div>`
     : `<div class="sheet-cell empty"></div>`).join("");
   return `<div class="sheet-preview ${orientation}" style="grid-template-columns:repeat(${cols},1fr);grid-template-rows:repeat(${rows},1fr)">${cellHtml}</div><p class="hint centered-hint">1ページ ${n} 枚 · ${pageIndex + 1} / ${pages.length} ページ目（A4 ${orientation === "portrait" ? "縦" : "横"}）</p>`;
 }
@@ -1617,7 +1625,7 @@ async function printBatch() {
   const pageOrientation = $("#orientation").value === "portrait" ? "portrait" : "landscape";
   const n = perPage(), { cols, rows } = pageGrid(n, pageOrientation);
   const pages = pageSlices(outputItems(), n).map((slice) => {
-    const cells = slice.map((item) => `<div class="print-cell"><div class="print-svg">${selectedDiagramSvg(item.plane, item.loadCase, { mode: item.mode, comp: component() }, { scale: Number($("#scale").value) })}</div></div>`).join("");
+    const cells = slice.map((item) => `<div class="print-cell"><div class="print-svg">${selectedDiagramSvg(item.plane, item.loadCase, { mode: item.mode, comp: component() }, { scale: Number($("#scale").value), fontBoost: fontBoost(n, pageOrientation) })}</div></div>`).join("");
     return `<section class="print-page ${pageOrientation}${n > 1 ? " multi" : ""}" style="${n > 1 ? `grid-template-columns:repeat(${cols},1fr);grid-template-rows:repeat(${rows},1fr)` : ""}">${cells}</section>`;
   });
   root.innerHTML = pages.join("");
@@ -1636,7 +1644,8 @@ async function savePdfBatch() {
   if (!window.jspdf) { setStatus("PDF作成ライブラリを読み込めませんでした。ページを再読み込みしてください。", true); return; }
   const cases = mode === "stress" ? selected("case") : [null], planes = selected("plane");
   const modes = ["member", "section"].includes(mode) && $("#bothNumberTypes")?.checked ? ["member", "section"] : [mode];
-  const svgs = outputItems().map((item) => selectedDiagramSvg(item.plane, item.loadCase, { mode: item.mode, comp: component() }, { scale: Number($("#scale").value) }));
+  const pdfOrientation = $("#orientation").value === "portrait" ? "portrait" : "landscape";
+  const svgs = outputItems().map((item) => selectedDiagramSvg(item.plane, item.loadCase, { mode: item.mode, comp: component() }, { scale: Number($("#scale").value), fontBoost: fontBoost(perPage(), pdfOrientation) }));
   const button = $("#printButton");
   button.disabled = true;
   try {
