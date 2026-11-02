@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f5f7f6" />
     <title>GEN 図面 一括出力</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=1.7.0" />
   </head>
   <body>
     <header class="topbar">
@@ -21,7 +21,7 @@
       <section class="intro">
         <p class="eyebrow">MIDAS GEN NX 形式対応 · ブラウザー内で処理</p>
         <h1>応力図と番号図を、まとめて出力。</h1>
-        <p class="intro-copy">登録平面ごとに応力図・部材番号図・断面番号図を作成します。番号図はMGTXだけで利用できます。</p>
+        <p class="intro-copy">登録平面ごとに応力図・部材番号図・断面番号図・境界条件図を作成します。番号図と境界条件図はMGTXだけで利用できます。</p>
       </section>
 
       <section class="card input-card" aria-labelledby="files-title">
@@ -69,6 +69,7 @@
                 <label class="component-choice"><input type="radio" name="diagramType" value="stress" checked /><span><b>応力図</b><small>ANLが必要</small></span></label>
                 <label class="component-choice"><input type="radio" name="diagramType" value="member" /><span><b>部材番号</b><small>MGTXのみ</small></span></label>
                 <label class="component-choice"><input type="radio" name="diagramType" value="section" /><span><b>断面番号</b><small>MGTXのみ</small></span></label>
+                <label class="component-choice"><input type="radio" name="diagramType" value="boundary" /><span><b>境界条件</b><small>MGTXのみ</small></span></label>
               </div>
             </div>
             <div id="caseBlock" class="setting-block">
@@ -123,7 +124,6 @@
               </div>
               <p class="hint stress-only">数値の実精度はANLファイルの桁数までです。元データが小数1桁の場合、2桁以上で表示しても精度は増えません。</p>
               <label class="check-setting"><input id="showDimensions" type="checkbox" checked /> 通り芯・通り符号を重ねる</label>
-              <label class="check-setting"><input id="showBoundary" type="checkbox" checked /> 境界条件（支点・ピン接合・回転ばね）を表示</label>
               <label class="check-setting member-only"><input id="showMemberEnds" type="checkbox" checked /> 単一部材の両端にオレンジ●を表示</label>
               <label class="member-only">端点●の直径<select id="memberEndSize"><option value="0.5">0.5 mm</option><option value="0.8" selected>0.8 mm</option><option value="1.2">1.2 mm</option><option value="1.6">1.6 mm</option><option value="2">2 mm</option></select></label>
               <label class="member-only">部材端から内側への距離<select id="memberEndInset"><option value="0.5">0.5 mm</option><option value="1" selected>1 mm</option><option value="1.5">1.5 mm</option><option value="2">2 mm</option><option value="3">3 mm</option></select></label>
@@ -154,6 +154,6 @@
       <footer class="app-footer"><span>GEN 図面 一括出力 · v1.2</span><span>非公式ツール · 出力図は GEN NX の原図と照合してください</span></footer>
     </main>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="./app.js?v=1.6.0"></script>
+    <script src="./app.js?v=1.7.0"></script>
   </body>
 </html>

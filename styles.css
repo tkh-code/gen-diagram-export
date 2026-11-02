@@ -20,6 +20,7 @@
 #workspace.numbering-mode #caseBlock,#workspace.numbering-mode #componentBlock,#workspace.numbering-mode .stress-only,#workspace.numbering-mode #previewCase{display:none!important}
 .numbering-only{display:none}
 #workspace.numbering-mode .numbering-only{display:flex}
+#workspace.boundary-mode .numbering-only{display:none}
 .member-only{display:none!important}
 #workspace.member-mode .member-only{display:flex!important}
 .title-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:11px}

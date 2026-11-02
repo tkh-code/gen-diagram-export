@@ -472,7 +472,7 @@ function syncFontSizeForMode() {
 }
 
 function componentLabel(kind) {
-  return ({ MY: "M-y · 曲げモーメント", MZ: "M-z · 曲げモーメント", QY: "Q-y · せん断力", QZ: "Q-z · せん断力", N: "N · 軸力", member: "部材番号", section: "断面番号" })[kind];
+  return ({ MY: "M-y · 曲げモーメント", MZ: "M-z · 曲げモーメント", QY: "Q-y · せん断力", QZ: "Q-z · せん断力", N: "N · 軸力", member: "部材番号", section: "断面番号", boundary: "境界条件" })[kind];
 }
 
 function drawingTitle(plane, loadCase, comp) {
@@ -482,7 +482,7 @@ function drawingTitle(plane, loadCase, comp) {
   let line = enteredLine || inferredLine || "〇";
   if (!line.endsWith("通り")) line += "通り";
   if (plane?.partLabel) line += `（${plane.partLabel}）`;
-  if (comp === "member" || comp === "section") return { line, detail: comp === "member" ? "部材番号" : "断面番号" };
+  if (["member", "section", "boundary"].includes(comp)) return { line, detail: diagramKindName(comp) };
   const diagramCode = ({ MY: "My", MZ: "Mz", QY: "Qy", QZ: "Qz", N: "N" })[comp] || String(comp || "");
   return { line, detail: `${diagramCode}図 (${caseLabel(String(loadCase || ""))})` };
 }
@@ -898,8 +898,10 @@ function boundarySvg(model, plane, segments, pt2) {
     x += 24 + item.name.length * 10;
     return mark + text;
   }).join("");
-  return { symbols: `<g class="boundary-symbols">${symbols.join("")}</g>`, legend };
+  return { symbols: `<g class="boundary-symbols">${symbols.join("")}</g>`, legend, count: symbols.length };
 }
+
+const diagramKindName = (kind) => ({ member: "部材番号", section: "断面番号", boundary: "境界条件", boundary: "境界条件" })[kind];
 
 const boundaryStyle = (fontFamily) => `.boundary-symbols>*,.boundary-symbols g>*{fill:#fff;stroke:#171a18;stroke-width:.7}.boundary-symbols .boundary-fill{fill:#171a18;stroke:none}.boundary-label{font-family:${fontFamily};font-size:9px;fill:#171a18}`;
 
@@ -995,7 +997,7 @@ function memberStressLabels(model, plane, memberData, valueMode) {
 function numberingDiagramSvg(plane, kind, options = {}) {
   const model = app.model?.parsed;
   if (!model || !plane || typeof plane === "string") return "";
-  const segments = elementsOnPlane(model, plane), groups = numberingGroups(model, plane, kind);
+  const segments = elementsOnPlane(model, plane), groups = kind === "boundary" ? [] : numberingGroups(model, plane, kind);
   const width = 1200, height = 590, frame = $("#frame")?.value !== "off";
   const dimensionEnabled = options.showDimensions ?? $("#showDimensions")?.checked ?? true;
   const dimensionItems = dimensionEnabled ? dimensionItemsForPlane(model, plane) : [];
@@ -1034,7 +1036,7 @@ function numberingDiagramSvg(plane, kind, options = {}) {
   }
   const memberLines = segments.map(({ element, a, b }) => {
     const A = pt2(a), B = pt2(b);
-    return `<line data-element-id="${element.id}" x1="${A[0].toFixed(1)}" y1="${A[1].toFixed(1)}" x2="${B[0].toFixed(1)}" y2="${B[1].toFixed(1)}" stroke="${kind === "member" ? "#c58721" : "#5e874c"}" stroke-width="${element.type === "BEAM" ? 0.78 : 0.64}"/>`;
+    return `<line data-element-id="${element.id}" x1="${A[0].toFixed(1)}" y1="${A[1].toFixed(1)}" x2="${B[0].toFixed(1)}" y2="${B[1].toFixed(1)}" stroke="${kind === "member" ? "#c58721" : kind === "boundary" ? "#59645f" : "#5e874c"}" stroke-width="${element.type === "BEAM" ? 0.78 : 0.64}"/>`;
   });
   const showMemberEnds = kind === "member" && (options.showMemberEnds ?? $("#showMemberEnds")?.checked ?? true);
   const memberEndRadius = Math.max(0.2, Math.min(2, Number(options.memberEndSize ?? $("#memberEndSize")?.value ?? 0.8))) * width / 277 / 2;
@@ -1052,7 +1054,7 @@ function numberingDiagramSvg(plane, kind, options = {}) {
     const x = from[0] + dx * inset / length, y = from[1] + dy * inset / length;
     memberEndDots.push(`<circle data-member-boundary-node="${nodeId}" data-member-id="${group.memberId}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${memberEndRadius.toFixed(2)}" fill="#d9870d"><title>単一部材 ${group.memberId} の端点（部材内側）</title></circle>`);
   }
-  const boundary = (options.showBoundary ?? $("#showBoundary")?.checked ?? true) ? boundarySvg(model, plane, segments, pt2) : { symbols: "", legend: "" };
+  const boundary = kind === "boundary" ? boundarySvg(model, plane, segments, pt2) : { symbols: "", legend: "", count: 0 };
   const occupied = [], numberLabels = [];
   for (const group of groups) {
     const origin = pt2(group.point), a = pt2(group.segment.a), b = pt2(group.segment.b);
@@ -1065,10 +1067,10 @@ function numberingDiagramSvg(plane, kind, options = {}) {
     occupied.push(box);
     numberLabels.push(`<text data-number="${escapeHtml(group.label)}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle" transform="rotate(${angle.toFixed(1)} ${x.toFixed(1)} ${y.toFixed(1)})">${escapeHtml(group.label)}</text>`);
   }
-  const diagramName = kind === "member" ? "部材番号" : "断面番号";
+  const diagramName = diagramKindName(kind);
   const lineName = drawingTitle(plane, "", kind).line;
   const dimensionViewName = dimensionItems[0]?.viewName || "";
-  app.lastDiagnostics = { plane: plane.name, diagramType: kind, total: groups.length, resultCount: numberLabels.length, elements: segments.length, dimensionViewName };
+  app.lastDiagnostics = { plane: plane.name, diagramType: kind, total: groups.length, resultCount: numberLabels.length, boundaryCount: boundary.count, elements: segments.length, dimensionViewName };
   return `<svg class="diagram-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" data-dimension-view="${escapeHtml(dimensionViewName)}" role="img" aria-label="${escapeHtml(plane.name)} ${diagramName}図">
     <style>.dimension-line{stroke:${dimensionColor};stroke-width:${dimensionLineWidth};fill:none}.dimension-label,.number-label{font-family:${fontFamily};font-size:${fontSize.toFixed(2)}px;font-weight:${fontWeight};fill:${color}}.sheet-title{font-family:${fontFamily};font-size:${ptToSvg(8).toFixed(2)}px;fill:${color}}${boundaryStyle(fontFamily)}</style>
     <rect x="0" y="0" width="${width}" height="${height}" fill="#fff"/>
@@ -1081,10 +1083,10 @@ function numberingDiagramSvg(plane, kind, options = {}) {
 }
 
 function demoNumberingSvg(plane, kind) {
-  const name = kind === "member" ? "部材番号" : "断面番号";
+  const name = diagramKindName(kind);
   const lines = [180, 300, 420, 540].map((x) => `<line x1="${x}" y1="145" x2="${x}" y2="335" stroke="#59645f" stroke-width=".8"/>`);
   for (const y of [145, 240, 335]) lines.push(`<line x1="180" y1="${y}" x2="540" y2="${y}" stroke="#59645f" stroke-width=".8"/>`);
-  const labels = kind === "member" ? [101,102,103,104,105,106,107,108,109,110,111,112] : [1,1,2,3,3,4,5,5,5,6,6,6];
+  const labels = kind === "boundary" ? [] : kind === "member" ? [101,102,103,104,105,106,107,108,109,110,111,112] : [1,1,2,3,3,4,5,5,5,6,6,6];
   const positions = [[240,145],[360,145],[480,145],[240,240],[360,240],[480,240],[240,335],[360,335],[480,335],[180,195],[300,195],[420,195]];
   return `<svg class="diagram-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 470" role="img" aria-label="サンプル ${name}"><rect x="16" y="16" width="728" height="398" fill="#fff" stroke="#53615c"/><g>${lines.join("")}</g><g font-family="Arial,sans-serif" font-size="12" fill="#171a18" text-anchor="middle">${positions.map(([x,y],i) => `<text x="${x}" y="${y-4}">${labels[i]}</text>`).join("")}</g><text x="24" y="442" font-size="14">${escapeHtml(plane)}　${name}（サンプル）</text></svg>`;
 }
@@ -1261,7 +1263,6 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
     missingIds: diagramMembers.filter(({ values }) => !values.length).map(({ element }) => element.id),
     outOfPlaneCount,
   };
-  const boundary = (options.showBoundary ?? $("#showBoundary")?.checked ?? true) ? boundarySvg(model, plane, planeMembers, pt2) : { symbols: "", legend: "" };
   const noMembers = planeMembers.length === 0;
   const unitParts = (result.units || "").split(/[ ,、]+/).filter(Boolean);
   const forceUnit = unitParts[0] || "ANL単位";
@@ -1317,18 +1318,17 @@ function actualDiagramSvg(plane, loadCase, comp, options = {}) {
       .legend-meta{font:${(legendFontSize * 0.86).toFixed(2)}px ${fontFamily};fill:#171a18}
       .file-label{font:${(legendFontSize * 0.78).toFixed(2)}px ${fontFamily};fill:#171a18}
       .triad-label{font:${(legendFontSize * 0.82).toFixed(2)}px ${fontFamily}}
-      ${boundaryStyle(fontFamily)}
     </style>
     <!-- The PDF reference places the A4 landscape frame as a centered, shallow wide panel. -->
     <rect x="64" y="58" width="1072" height="473" fill="#fff" ${frame ? 'stroke="#3e4642" stroke-width=".8"' : ""}/>
     <g>${dimensionLines.join("")}</g><g>${contourCells.join("")}</g>
-    <g>${memberLines.join("")}</g>${boundary.symbols}<g>${dimensionLabels.join("")}${labelSvg.join("")}</g>
+    <g>${memberLines.join("")}</g><g>${dimensionLabels.join("")}${labelSvg.join("")}</g>
     ${frame
       ? `<line x1="${legendDividerX.toFixed(2)}" y1="58" x2="${legendDividerX.toFixed(2)}" y2="531" class="legend-divider"/>`
       : `<rect x="${legendPanelLeft.toFixed(2)}" y="58" width="${(legendPanelRight - legendPanelLeft).toFixed(2)}" height="473" class="legend-frame"/>`}
     <g transform="translate(${legendPanelTranslateX.toFixed(2)} 0) scale(${legendPanelScaleX.toFixed(5)} 1)">${legend}</g>
     <text x="64" y="547" class="drawing-title">${escapeHtml(sheetTitle.line)}</text>
-    <text x="64" y="565" class="drawing-title">${escapeHtml(sheetTitle.detail)}</text>${boundary.legend}
+    <text x="64" y="565" class="drawing-title">${escapeHtml(sheetTitle.detail)}</text>
   </svg>`;
 }
 
@@ -1342,7 +1342,7 @@ function currentChoice() {
 }
 
 function selectedDiagramSvg(plane, loadCase, choice, options = {}) {
-  if (choice.mode === "member" || choice.mode === "section") {
+  if (choice.mode !== "stress") {
     return app.data.synthetic ? demoNumberingSvg(plane, choice.mode) : numberingDiagramSvg(plane, choice.mode, options);
   }
   return app.data.synthetic ? diagramSvg(plane, loadCase, choice.comp, options) : actualDiagramSvg(plane, loadCase, choice.comp, options);
@@ -1354,6 +1354,7 @@ function updatePreview() {
   const numbering = choice.mode !== "stress";
   $("#workspace").classList.toggle("numbering-mode", numbering);
   $("#workspace").classList.toggle("member-mode", choice.mode === "member");
+  $("#workspace").classList.toggle("boundary-mode", choice.mode === "boundary");
   $("#previewPlane").textContent = app.data.synthetic ? choice.plane : (app.data.planes[app.previewPlane]?.name || "未選択");
   $("#previewCase").textContent = caseLabel(choice.loadCase);
   $("#previewComponent").textContent = componentLabel(numbering ? choice.mode : choice.comp);
@@ -1371,7 +1372,9 @@ function updatePreview() {
   const diagnostic = app.data.synthetic ? null : app.lastDiagnostics;
   $("#coverageStatus").textContent = diagnostic && hasPlane && (numbering || (hasCase && hasResult))
     ? numbering
-      ? `表示: ${diagnostic.resultCount}/${diagnostic.total} 番号（面上の線要素 ${diagnostic.elements}）`
+      ? choice.mode === "boundary"
+        ? `表示: 境界条件の記号 ${diagnostic.boundaryCount}（面上の線要素 ${diagnostic.elements}）`
+        : `表示: ${diagnostic.resultCount}/${diagnostic.total} 番号（面上の線要素 ${diagnostic.elements}）`
       : `表示: ${diagnostic.resultCount}/${diagnostic.total} 対象要素（梁 ${diagnostic.beam}・トラス系 ${diagnostic.truss}）${diagnostic.trussSkeletonOnly ? `／トラス系 ${diagnostic.trussSkeletonOnly} は骨組み線のみ` : ""}${diagnostic.missingIds.length ? `／結果なし: ${diagnostic.missingIds.join(", ")}` : ""}${diagnostic.outOfPlaneCount ? `／面外方向を図面内へ代替表示: ${diagnostic.outOfPlaneCount}` : ""}`
     : "";
   if (diagnostic?.dimensionViewName && hasPlane) $("#coverageStatus").textContent += `／寸法ビュー: ${diagnostic.dimensionViewName}`;
@@ -1379,7 +1382,7 @@ function updatePreview() {
 
 function updateOutputCount() {
   const numbering = diagramType() !== "stress";
-  const bothNumberTypes = numbering && $("#bothNumberTypes")?.checked;
+  const bothNumberTypes = ["member", "section"].includes(diagramType()) && $("#bothNumberTypes")?.checked;
   const count = selected("plane").length * (numbering ? (bothNumberTypes ? 2 : 1) : selected("case").length);
   $("#outputCount").textContent = count ? `${count} 枚を印刷対象にします（${numbering ? (bothNumberTypes ? "部材番号 → 断面番号" : "登録平面ごと") : "ケース × 平面"}）` : "出力する図を選択してください";
   const ready = app.data?.synthetic || (app.data?.planes.length > 0 && (numbering ? app.model?.parsed?.elements.length > 0 : app.result?.parsed?.elements.size > 0));
@@ -1467,7 +1470,7 @@ function downloadSvg() {
   const planeName = typeof plane === "string" ? plane : plane.name;
   saveFile(choice.mode === "stress"
     ? `${safeFilename(planeName)}_${safeFilename(caseLabel(choice.loadCase))}_${choice.comp}.svg`
-    : `${safeFilename(planeName)}_${choice.mode === "member" ? "部材番号" : "断面番号"}.svg`, blob);
+    : `${safeFilename(planeName)}_${diagramKindName(choice.mode)}.svg`, blob);
 }
 
 // Rasterize one SVG at print resolution (Japanese text keeps the browser's
@@ -1514,7 +1517,7 @@ async function printBatch() {
   const mode = diagramType();
   if (!app.data?.synthetic && (!app.model?.parsed || (mode === "stress" && !app.result?.parsed?.elements.size))) return;
   const cases = mode === "stress" ? selected("case") : [null], planes = selected("plane");
-  const modes = mode !== "stress" && $("#bothNumberTypes")?.checked ? ["member", "section"] : [mode];
+  const modes = ["member", "section"].includes(mode) && $("#bothNumberTypes")?.checked ? ["member", "section"] : [mode];
   const root = document.createElement("div");
   root.id = "printRoot";
   root.className = "hidden";
@@ -1540,7 +1543,7 @@ async function savePdfBatch() {
   if (!app.data?.synthetic && (!app.model?.parsed || (mode === "stress" && !app.result?.parsed?.elements.size))) return;
   if (!window.jspdf) { setStatus("PDF作成ライブラリを読み込めませんでした。ページを再読み込みしてください。", true); return; }
   const cases = mode === "stress" ? selected("case") : [null], planes = selected("plane");
-  const modes = mode !== "stress" && $("#bothNumberTypes")?.checked ? ["member", "section"] : [mode];
+  const modes = ["member", "section"].includes(mode) && $("#bothNumberTypes")?.checked ? ["member", "section"] : [mode];
   const svgs = [];
   for (const outputMode of modes) for (const planeIdx of planes) for (const caseIdx of cases) {
     const plane = app.data.planes[planeIdx], loadCase = caseIdx === null ? "" : app.data.cases[caseIdx];
@@ -1551,7 +1554,7 @@ async function savePdfBatch() {
   try {
     const blob = await buildPdf(svgs, $("#orientation").value === "portrait" ? "portrait" : "landscape");
     const base = safeFilename((app.model?.name || "GEN図面").replace(/\.(mgtx|mgt)$/i, ""));
-    const kind = mode === "stress" ? `応力図_${component()}` : modes.length > 1 ? "部材番号_断面番号" : mode === "member" ? "部材番号" : "断面番号";
+    const kind = mode === "stress" ? `応力図_${component()}` : modes.length > 1 ? "部材番号_断面番号" : diagramKindName(mode);
     setStatus(`PDF（${svgs.length} 枚）を作成しました。保存先を確認してください。`);
     await saveFile(`${base}_${kind}.pdf`, blob);
   } catch (error) {
@@ -1586,7 +1589,7 @@ for (const [inputId, nameId, kind] of [["modelInput", "modelName", "model"], ["r
 document.addEventListener("change", (event) => {
   if (event.target.matches('input[name="diagramType"]')) syncFontSizeForMode();
   if (event.target.matches('#labelFontSize')) app.fontSizes[app.fontSizeMode] = event.target.value;
-  if (event.target.matches('input[data-kind], input[name="diagramType"], input[name="component"], #bothNumberTypes, #titleLine, #scale, #frame, #valueMode, #showDimensions, #showBoundary, #showMemberEnds, #memberEndSize, #memberEndInset, #hideOverlaps, #contourColors, #legendPosition, #decimalPlaces, #rankDecimals, #diagramFill, #labelOrientation, #labelOffsetMm, #fontFamily, #labelFontSize, #legendFontSize, #fontWeight, #valueColor, #dimensionLineWidth, #dimensionColor, #labelLimitPercent')) refresh();
+  if (event.target.matches('input[data-kind], input[name="diagramType"], input[name="component"], #bothNumberTypes, #titleLine, #scale, #frame, #valueMode, #showDimensions, #showMemberEnds, #memberEndSize, #memberEndInset, #hideOverlaps, #contourColors, #legendPosition, #decimalPlaces, #rankDecimals, #diagramFill, #labelOrientation, #labelOffsetMm, #fontFamily, #labelFontSize, #legendFontSize, #fontWeight, #valueColor, #dimensionLineWidth, #dimensionColor, #labelLimitPercent')) refresh();
   if (event.target.matches("#orientation")) document.body.classList.toggle("print-portrait", event.target.value === "portrait");
 });
 $("#caseAll").addEventListener("click", () => useAll("case"));
